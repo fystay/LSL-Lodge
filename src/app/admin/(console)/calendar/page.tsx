@@ -109,7 +109,12 @@ async function AdminCalendar({
           Next month
         </Link>
       </div>
-      <div className="overflow-x-auto">
+      <div
+        className="overflow-x-auto"
+        tabIndex={0}
+        role="region"
+        aria-label="Calendar (scrolls sideways on small screens)"
+      >
         <table className="w-full min-w-[44rem] table-fixed border-collapse text-sm">
           <caption className="sr-only">
             Nights in {title} and what occupies them

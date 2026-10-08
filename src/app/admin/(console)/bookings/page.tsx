@@ -57,7 +57,12 @@ async function Bookings({
           Search
         </button>
       </form>
-      <div className="overflow-x-auto">
+      <div
+        className="overflow-x-auto"
+        tabIndex={0}
+        role="region"
+        aria-label="Bookings table (scrolls sideways on small screens)"
+      >
         <table className="w-full min-w-[40rem] text-left text-sm">
           <caption className="sr-only">Bookings</caption>
           <thead>
