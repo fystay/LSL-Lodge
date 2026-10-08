@@ -11,8 +11,11 @@ import { useEffect, useLayoutEffect, useRef, useState } from "react";
  *
  * The bar pins directly under the sticky site header (4.5rem + 1px border)
  * on a solid background: no backdrop-filter, which iOS Safari can fail to
- * repaint on sticky elements during momentum scrolling. Sections pair with
- * it through `.section-anchor` (scroll-margin) in globals.css.
+ * repaint on sticky elements during momentum scrolling.
+ *
+ * Target sections set scroll-margin-top to header + bar (8.3rem + 1px), plus
+ * 1.5rem of air, minus their own top padding, so a tapped section lands with
+ * its eyebrow just below the bar.
  */
 export function SectionNav({
   sections,
