@@ -7,7 +7,7 @@ export function SiteHeader() {
   return (
     <header
       id="site-header"
-      className="sticky top-0 z-40 border-b border-sage-300/70 bg-ivory/95 backdrop-blur supports-[backdrop-filter]:bg-ivory/85"
+      className="sticky top-0 z-40 border-b border-sage-300/70 bg-ivory"
     >
       <Container className="flex h-18 items-center justify-between gap-6">
         <Link

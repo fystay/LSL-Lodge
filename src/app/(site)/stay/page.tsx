@@ -103,7 +103,7 @@ export default function StayPage() {
       <section
         id="bedrooms"
         aria-labelledby="bedrooms-title"
-        className="scroll-mt-36 py-16 sm:py-20"
+        className="section-anchor py-16 sm:py-20"
       >
         <Container>
           <div className="reveal max-w-2xl">
@@ -170,7 +170,7 @@ export default function StayPage() {
       <section
         id="details"
         aria-labelledby="details-title"
-        className="scroll-mt-36 border-t border-sage-300/60 bg-limestone/60"
+        className="section-anchor section-anchor-tight border-t border-sage-300/60 bg-limestone/60"
       >
         <Container className="grid gap-12 py-14 sm:py-16 lg:grid-cols-[1fr_1.4fr]">
           <h2 id="details-title" className="text-title">
@@ -261,7 +261,7 @@ function Space({
     <section
       id={id}
       aria-labelledby={`${id}-title`}
-      className={`scroll-mt-36 py-16 sm:py-20 ${tinted ? "bg-limestone/60" : ""}`}
+      className={`section-anchor py-16 sm:py-20 ${tinted ? "bg-limestone/60" : ""}`}
     >
       <Container className="grid gap-10 lg:grid-cols-[1fr_1.6fr] lg:items-start">
         <div className="reveal lg:sticky lg:top-40">

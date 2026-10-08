@@ -219,6 +219,26 @@ input[type="date"]::-webkit-date-and-time-value {
     animation-delay: 360ms;
   }
 
+  /* In-page sections under the sticky header (4.5rem + 1px) and the
+     SectionNav bar (about 3.8rem): a tapped section lands with its eyebrow
+     about 1.5rem below the bar, net of the section's own top padding
+     (py-16 / sm:py-20, or py-14 / sm:py-16 for the tight variant). */
+  .section-anchor {
+    --bars: calc(4.5rem + 1px + 3.8rem);
+    scroll-margin-top: calc(var(--bars) + 1.5rem - 4rem);
+  }
+  .section-anchor.section-anchor-tight {
+    scroll-margin-top: calc(var(--bars) + 1.5rem - 3.5rem);
+  }
+  @media (min-width: 40rem) {
+    .section-anchor {
+      scroll-margin-top: calc(var(--bars) + 1.5rem - 5rem);
+    }
+    .section-anchor.section-anchor-tight {
+      scroll-margin-top: calc(var(--bars) + 1.5rem - 4rem);
+    }
+  }
+
   /* Hero room label fades in as each slide arrives. */
   .label-in {
     animation: fade-in 700ms var(--ease-calm) both;
