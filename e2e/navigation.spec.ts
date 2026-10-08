@@ -104,7 +104,7 @@ test("gallery opens at the photo that was clicked", async ({ page }) => {
   );
 });
 
-test("hero slideshow can be paused and stepped with keyboard controls", async ({
+test("hero slideshow can be paused and slides chosen directly", async ({
   page,
 }) => {
   await page.emulateMedia({ reducedMotion: "no-preference" });
@@ -112,17 +112,15 @@ test("hero slideshow can be paused and stepped with keyboard controls", async ({
   const carousel = page.getByRole("group", {
     name: "Photographs of the lodge",
   });
-  await expect(carousel).toContainText("The lodge from across the water");
-  // Controls are hidden until focused; they still exist for keyboard users.
-  const pause = carousel.getByRole("button", { name: "Pause slideshow" });
-  await pause.focus();
-  await page.keyboard.press("Enter");
+  await carousel.getByRole("button", { name: "Pause slideshow" }).click();
   await expect(
     carousel.getByRole("button", { name: "Play slideshow" }),
   ).toBeVisible();
-  await carousel.getByRole("button", { name: "Next photo" }).click();
-  await expect(carousel).toContainText("Photo 2 of 4");
-  await expect(carousel).toContainText("Living and dining");
+  await carousel.getByRole("button", { name: /Show photo 2 of 4/ }).click();
+  await expect(
+    carousel.getByRole("button", { name: /Show photo 2 of 4/ }),
+  ).toHaveAttribute("aria-current", "true");
+  await expect(carousel).toContainText("Evenings on the deck");
 });
 
 test("hero slideshow never autoplays for visitors who prefer reduced motion", async ({
@@ -137,7 +135,9 @@ test("hero slideshow never autoplays for visitors who prefer reduced motion", as
     0,
   );
   await page.waitForTimeout(7_500);
-  await expect(carousel).toContainText("Photo 1 of 4");
+  await expect(
+    carousel.getByRole("button", { name: /Show photo 1 of 4/ }),
+  ).toHaveAttribute("aria-current", "true");
 });
 
 test("photo viewer moves by swiping, and the counter follows", async ({

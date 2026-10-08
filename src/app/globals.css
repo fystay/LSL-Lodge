@@ -219,11 +219,6 @@ input[type="date"]::-webkit-date-and-time-value {
     animation-delay: 360ms;
   }
 
-  /* Hero room label settles in as each slide arrives. */
-  .caption-in {
-    animation: rise 900ms var(--ease-calm) both;
-  }
-
   /* Active hero slide drifts slowly inward ("Ken Burns"). */
   .slide-zoom {
     animation: slow-zoom 9s linear both;
