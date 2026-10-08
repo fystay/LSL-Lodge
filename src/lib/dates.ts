@@ -115,3 +115,8 @@ export function formatStayDate(date: IsoDate): string {
   const get = (type: string) => parts.find((p) => p.type === type)?.value;
   return `${get("weekday")} ${get("day")} ${get("month")} ${get("year")}`;
 }
+
+/** First day of the month containing `date`. */
+export function startOfMonth(date: IsoDate): IsoDate {
+  return `${date.slice(0, 8)}01` as IsoDate;
+}

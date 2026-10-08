@@ -24,3 +24,13 @@ export function db(): Database {
   cached ??= createDatabase(databaseEnv().DATABASE_URL);
   return cached;
 }
+
+/** A transaction handle, for functions that must run inside one. */
+export type Transaction = Parameters<Parameters<Database["transaction"]>[0]>[0];
+
+/** Either the database or an open transaction. */
+export type Executor = Database | Transaction;
+
+export function isDatabaseConfigured(): boolean {
+  return Boolean(process.env.DATABASE_URL);
+}

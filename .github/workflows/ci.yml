@@ -62,6 +62,17 @@ jobs:
   e2e:
     name: End-to-end and accessibility
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: lodge
+          POSTGRES_PASSWORD: lodge
+          POSTGRES_DB: lodge_e2e
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U lodge" --health-interval 5s --health-timeout 5s
+          --health-retries 10
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
@@ -72,7 +83,24 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm exec playwright install --with-deps chromium
       - run: pnpm build
-      - run: pnpm test:e2e
+      - name: Public site (booking engine off)
+        run: pnpm test:e2e
+      - name: Prepare local database with placeholder data
+        env:
+          DATABASE_URL: postgres://lodge:lodge@localhost:5432/lodge_e2e
+        run: pnpm db:migrate && pnpm db:seed:dev
+      - name: Booking flow and admin (preview configuration)
+        env:
+          DATABASE_URL: postgres://lodge:lodge@localhost:5432/lodge_e2e
+          E2E_BOOKING: "true"
+          BOOKING_PREVIEW: "true"
+          ADMIN_AUTH_MODE: local
+          ADMIN_EMAILS: owner@example.test
+        run: |
+          # Throwaway credentials for this CI run only.
+          export ADMIN_LOCAL_PASSWORD="$(openssl rand -hex 16)"
+          export ADMIN_SESSION_SECRET="$(openssl rand -hex 32)"
+          pnpm test:e2e
       - uses: actions/upload-artifact@v4
         if: failure()
         with:

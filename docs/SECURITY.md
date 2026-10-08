@@ -1,6 +1,6 @@
 # Security and privacy notes
 
-## In place (Phases 0–1)
+## In place (Phases 0–2)
 
 - **Headers** (`next.config.ts`): CSP, `X-Frame-Options: DENY` /
   `frame-ancestors 'none'`, `nosniff`, a strict referrer policy, a restrictive
@@ -37,12 +37,31 @@
   until `SITE_INDEXABLE=true`. Availability and booking routes are always
   `noindex`.
 
+### Added in Phase 2
+
+- **Admin**: every admin page and server action calls `requireAdmin()`.
+  Sessions are HMAC-signed, httpOnly, `SameSite=Strict` cookies lasting 8
+  hours, and the email allowlist is re-checked on every request. Failed
+  sign-ins don't reveal which field was wrong. The only implemented mode,
+  `local`, is refused when `VERCEL` is set or its secrets are weak.
+- **Guest booking access**: a 256-bit random token per booking, stored only as
+  a SHA-256 hash, in an httpOnly cookie scoped to `/book/<reference>`. A wrong
+  or missing token shows the same not-found page as an unknown reference.
+- **Server-authoritative booking**: holds are priced and checked inside a
+  locked transaction. Client-submitted prices are ignored (tested).
+  Idempotency keys make double submissions safe.
+- **Job endpoints** need `Authorization: Bearer $CRON_SECRET` (32+
+  characters), compared in constant time, and fail closed when unset.
+- **Admin search** escapes `LIKE` wildcards; listings are capped at 50 rows.
+- **Seed script** refuses any non-local database host.
+
 ## Required before accepting bookings
 
 - Rate limiting on booking, contact, login, payment and webhook endpoints
   (e.g. Upstash/Vercel KV or a Postgres-backed limiter).
-- Admin auth with MFA and server-side role checks on every route and action;
-  re-authentication for sensitive actions.
+- Managed admin auth with MFA (Supabase adapter) to replace local mode on
+  deployed sites; re-authentication for sensitive actions. (Server-side checks
+  on every route and action are already in place.)
 - CSRF: server actions are POST-only with Origin checks by Next.js; any custom
   route handlers that change state must verify Origin too.
 - Webhook endpoint: raw-body signature verification (prototype done) and

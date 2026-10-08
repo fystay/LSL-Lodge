@@ -10,6 +10,10 @@ function isoInDays(days: number) {
 test("a valid search shows the dates and says plainly that booking isn't open", async ({
   page,
 }) => {
+  test.skip(
+    process.env.E2E_BOOKING === "true",
+    "covers the closed (no booking engine) configuration",
+  );
   await page.goto("/");
   const form = page.getByRole("form", { name: "Search dates" });
   await form.getByLabel("Check-in").fill(isoInDays(30));

@@ -1,6 +1,7 @@
 # Implementation plan
 
-Status as of 8 October 2026. Phases 0 and 1 are implemented in this repository.
+Status as of 8 October 2026. Phases 0, 1 and 2 are implemented in this repository
+(Phase 2 with the gaps listed in section 7).
 Nothing is deployed, no live payments are enabled and no real emails are sent.
 
 ## 1. Stack and rationale
@@ -161,11 +162,69 @@ provider's secret manager (names listed in `.env.example`).
 
 ## 6. Milestones and test gates
 
-| Phase                  | Scope                                                                                                         | Exit gate                                                                              | Status                                                                                                                          |
-| ---------------------- | ------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
-| 0 Discovery            | Stack, risks, prototypes: iCal parsing, SSRF-safe fetch, Stripe signature verification, credential encryption | Architecture, providers, risks and owner inputs documented                             | **Done** (Google OAuth prototype pending credentials)                                                                           |
-| 1 Foundation           | App, schema and migrations, CI, design tokens, layout, accessible primitives, gallery, public pages           | Build passes; pages responsive and accessible                                          | **Done**: build, 146 unit, 11 integration and 48 E2E tests with axe all pass locally. Content is placeholder pending the owner. |
-| 2 Booking and pricing  | Pricing engine and quote snapshots, availability service, holds, admin auth, admin calendar and owner blocks  | Concurrency tests prove overlapping stays can't both confirm (DB layer already proven) | Next                                                                                                                            |
-| 3 Stripe and comms     | Checkout, webhooks, schedule, balance links, refunds, reconciliation, email provider, notification jobs       | Stripe test-mode E2E incl. duplicate and failed webhooks                               |                                                                                                                                 |
-| 4 Calendar sync        | Airbnb import/export, Google OAuth and sync, conflict queue, health UI, alerts                                | Documented sync tests; visible failure handling; no real-time claims                   |                                                                                                                                 |
-| 5 Hardening and launch | Full audits, monitoring, backups and restore test, runbooks, owner UAT                                        | All charter §19 criteria; explicit owner launch approval                               |                                                                                                                                 |
+| Phase                  | Scope                                                                                                         | Exit gate                                                                              | Status                                                                                                                                     |
+| ---------------------- | ------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
+| 0 Discovery            | Stack, risks, prototypes: iCal parsing, SSRF-safe fetch, Stripe signature verification, credential encryption | Architecture, providers, risks and owner inputs documented                             | **Done** (Google OAuth prototype pending credentials)                                                                                      |
+| 1 Foundation           | App, schema and migrations, CI, design tokens, layout, accessible primitives, gallery, public pages           | Build passes; pages responsive and accessible                                          | **Done**: build, 146 unit, 11 integration and 48 E2E tests with axe all pass locally. Content is placeholder pending the owner.            |
+| 2 Booking and pricing  | Pricing engine and quote snapshots, availability service, holds, admin auth, admin calendar and owner blocks  | Concurrency tests prove overlapping stays can't both confirm (DB layer already proven) | **Done** (see §7): 12 simultaneous overlapping hold requests give exactly one hold; 198 unit, 24 integration and 66 E2E tests pass locally |
+| 3 Stripe and comms     | Checkout, webhooks, schedule, balance links, refunds, reconciliation, email provider, notification jobs       | Stripe test-mode E2E incl. duplicate and failed webhooks                               |                                                                                                                                            |
+| 4 Calendar sync        | Airbnb import/export, Google OAuth and sync, conflict queue, health UI, alerts                                | Documented sync tests; visible failure handling; no real-time claims                   |                                                                                                                                            |
+| 5 Hardening and launch | Full audits, monitoring, backups and restore test, runbooks, owner UAT                                        | All charter §19 criteria; explicit owner launch approval                               |                                                                                                                                            |
+
+## 7. Phase 2 — what was built and what is still open
+
+**Built**
+
+- **Pricing engine** (`src/server/pricing/quote.ts`): nightly rates chosen by
+  priority, then specificity; Friday/Saturday rates; minimum stay and allowed
+  arrival days from the arrival night's rule; per-stay, per-night,
+  per-extra-guest and percentage fees; integer pence with half-up rounding;
+  deposit/balance schedule with a full-payment window. The whole quote,
+  including rule IDs and versions, is stored as the immutable snapshot.
+- **Availability** (`src/server/booking/availability.ts`): combines blocking
+  reservations, live (unexpired) holds, owner blocks and active external busy
+  periods, widened by the changeover buffer.
+- **Holds** (`src/server/booking/holds.ts`): one transaction that locks the
+  property row, replays duplicate submissions by idempotency key, expires
+  lapsed holds, re-checks every block source, prices from current rules, and
+  inserts the reservation, schedule and audit entry. The exclusion constraint
+  is the backstop. Holds last 30 minutes. The guest's access token is random,
+  stored only as a SHA-256 hash, and kept in an httpOnly cookie scoped to that
+  booking's page.
+- **Hold sweeper**: `GET /api/jobs/expire-holds` with
+  `Authorization: Bearer $CRON_SECRET`. Expiry is also enforced at request
+  time, so a missed run never double-books.
+- **Guest journey**: search → itemised quote, payment schedule and
+  availability calendar → guest details (name, email, optional phone, terms)
+  → hold page. **There is no payment step yet (Phase 3)**, so the flow only
+  appears when `BOOKING_PREVIEW=true`, a database is configured and the
+  property has bookings switched on. It is always off on Vercel production.
+- **Admin** (`/admin`): overview (upcoming stays, calendar connections,
+  activity), bookings search and detail (agreed price, schedule, history),
+  month calendar with a source label per night and conflict marking,
+  blocked dates (removal needs confirmation), pricing (rates with versioned
+  edits, fees, payment plan) and settings (occupancy, minimum stay,
+  changeover, horizon, times, bookings on/off). Every page and every server
+  action calls `requireAdmin()`, and every change is audit-logged with the
+  admin's email.
+
+**Open (deliberately not done yet)**
+
+- **Managed admin login with MFA.** Admin currently supports only
+  `ADMIN_AUTH_MODE=local` (allowlisted email + shared password), meant for
+  local development and tests and refused on every Vercel deployment. The
+  Supabase Auth (MFA) adapter will be added once the owner chooses the
+  Supabase project. Until then the deployed admin is disabled.
+- **Rate limiting** on hold creation, enquiry and login endpoints (needs a
+  shared store, e.g. Postgres or Upstash). Required before public launch.
+- **Database on Vercel.** By owner decision, Phase 2 runs against a local
+  database only. The deployed preview shows the public site with the booking
+  engine off.
+- **Public pages still read facts from `src/content/property.ts`**, not the
+  database settings. They will be unified when the owner confirms the facts.
+- **Owner-entered (manual) bookings and cancellations** from admin: the
+  schema and state machine support them; the UI comes with Phase 3's
+  cancellation and refund workflow.
+- The guest hold page returns HTTP 200 with not-found content when the token
+  is wrong, because the page streams. No booking data is disclosed, which the
+  E2E tests check.

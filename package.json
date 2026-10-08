@@ -20,7 +20,8 @@
     "db:generate": "drizzle-kit generate",
     "db:migrate": "tsx scripts/migrate.mts",
     "db:studio": "drizzle-kit studio",
-    "check": "pnpm format:check && pnpm lint && pnpm typecheck && pnpm test"
+    "check": "pnpm format:check && pnpm lint && pnpm typecheck && pnpm test",
+    "db:seed:dev": "tsx scripts/seed-dev.mts"
   },
   "dependencies": {
     "drizzle-orm": "0.45.3",

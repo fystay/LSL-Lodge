@@ -2,7 +2,6 @@
 
 import Link from "next/link";
 import type { Route } from "next";
-import { usePathname } from "next/navigation";
 import { useEffect, useId, useRef, useState } from "react";
 
 export function MobileNav({
@@ -10,14 +9,12 @@ export function MobileNav({
 }: {
   items: readonly { href: Route; label: string }[];
 }) {
-  const [open, setOpen] = useState(false);
-  const [openedAt, setOpenedAt] = useState<string | null>(null);
-  const pathname = usePathname();
+  const [isOpen, setOpen] = useState(false);
   const panelId = useId();
   const buttonRef = useRef<HTMLButtonElement>(null);
-
-  // Close after navigating: the menu only counts as open on the page it was opened on.
-  const isOpen = open && openedAt === pathname;
+  // Closes the menu when a link is followed. (Reading the URL here would force
+  // dynamic routes to suspend the whole header.)
+  const close = () => setOpen(false);
 
   useEffect(() => {
     if (!isOpen) return;
@@ -38,10 +35,7 @@ export function MobileNav({
         type="button"
         aria-expanded={isOpen}
         aria-controls={panelId}
-        onClick={() => {
-          setOpen(!isOpen);
-          setOpenedAt(pathname);
-        }}
+        onClick={() => setOpen(!isOpen)}
         className="inline-flex min-h-11 min-w-11 items-center justify-center gap-2 rounded-soft border border-sage-300 px-3 text-sm font-semibold text-pine-900"
       >
         <svg
@@ -81,7 +75,7 @@ export function MobileNav({
             <li key={item.href}>
               <Link
                 href={item.href}
-                aria-current={pathname === item.href ? "page" : undefined}
+                onClick={close}
                 className="flex min-h-12 items-center border-b border-sage-300/50 text-lg text-pine-900"
               >
                 {item.label}
@@ -91,6 +85,7 @@ export function MobileNav({
           <li className="py-4">
             <Link
               href="/availability"
+              onClick={close}
               className="flex min-h-12 items-center justify-center rounded-soft bg-pine-800 px-6 font-semibold text-ivory"
             >
               Check availability

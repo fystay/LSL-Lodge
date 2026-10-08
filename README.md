@@ -3,9 +3,11 @@
 Direct-booking website for Lodge on the Lake, a lakeside lodge at South
 Lakeland Leisure Village. It runs alongside the existing Airbnb listing.
 
-**Status:** Phases 0–1 (foundation and public site). Pre-launch preview only:
-online booking is not open, no payments or emails are live, and the site is
-`noindex`. Property content awaits owner confirmation.
+**Status:** Phases 0–2 (foundation, public site, booking engine and admin).
+Pre-launch preview only: no payments or emails are live, the booking flow is
+off unless explicitly enabled outside production, and the site is `noindex`.
+Property content awaits owner confirmation. See docs/PLAN.md §7 for what is
+still open.
 
 - Project charter: [CLAUDE.md](CLAUDE.md)
 - Plan, data model, payment and sync design: [docs/PLAN.md](docs/PLAN.md)
@@ -49,6 +51,28 @@ DATABASE_URL=postgres://user:pass@localhost:5432/lodge_dev pnpm db:migrate
 - Migrations run as an explicit deployment step (`pnpm db:migrate` with
   `DATABASE_URL_UNPOOLED`), never on app start.
 
+### Trying the booking flow and admin locally
+
+```bash
+export DATABASE_URL=postgres://user:pass@localhost:5432/lodge_dev
+pnpm db:migrate
+pnpm db:seed:dev            # placeholder property, rates and payment plan (local only)
+
+# In .env.local (never commit real values):
+#   BOOKING_PREVIEW=true
+#   ADMIN_AUTH_MODE=local
+#   ADMIN_EMAILS=you@example.com
+#   ADMIN_LOCAL_PASSWORD=<16+ characters>
+#   ADMIN_SESSION_SECRET=<32+ random characters>
+pnpm dev                    # /availability for guests, /admin for the owner
+```
+
+The seed's prices are made up. Real rates are entered by the owner in
+`/admin/pricing`. Local admin sign-in is refused on any Vercel deployment.
+
+To run the booking and admin E2E tests too:
+`E2E_BOOKING=true` plus the variables above, then `pnpm build && pnpm test:e2e`.
+
 ## Scripts
 
 | Command                        | Purpose                                                                                                      |
@@ -61,6 +85,7 @@ DATABASE_URL=postgres://user:pass@localhost:5432/lodge_dev pnpm db:migrate
 | `pnpm test:integration`        | PostgreSQL integration tests. Needs `TEST_DATABASE_URL` pointing at a **disposable** database (it is wiped). |
 | `pnpm test:e2e`                | Playwright E2E and axe accessibility tests against the production build (`pnpm build` first)                 |
 | `pnpm check`                   | Format, lint, types and unit tests                                                                           |
+| `pnpm db:seed:dev`             | Placeholder data for a **local** database (refuses any other host)                                           |
 
 CI (`.github/workflows/ci.yml`) runs all of the above, plus a production
 build, a dependency audit and integration tests against a Postgres service
@@ -75,13 +100,16 @@ src/
   content/             Property facts (with verification status) and photo manifest
   lib/                 Shared, framework-free logic: dates, time zones, search validation
   server/              Server-only domain code
-    booking/           Reservation state machine (+ DB overlap tests)
+    admin/             Admin auth, validation schemas, queries and audited mutations
+    booking/           State machine, availability, transactional holds
+    jobs/              Scheduler authentication
     calendar/          iCal parsing, SSRF-safe fetch, import reconciliation
     contact/           Enquiry validation
     crypto/            Credential encryption
     db/                Drizzle schema and client
     notifications/     Email abstraction
     payments/          Stripe webhook verification
+    pricing/           Quote engine and rule loading
 drizzle/               Committed SQL migrations
 e2e/                   Playwright tests
 docs/                  Plan and operational documentation
