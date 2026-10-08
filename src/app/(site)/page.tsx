@@ -19,7 +19,7 @@ const TIME_ZONE = "Europe/London";
 const heroSlides = [
   photo("lodge-across-water"),
   photo("living-room-media-wall"),
-  photo("second-bedroom-detail"),
+  photo("kitchen-island"),
   photo("deck-evening"),
 ];
 
