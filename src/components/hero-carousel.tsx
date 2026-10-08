@@ -1,7 +1,13 @@
 "use client";
 
 import Image from "next/image";
-import { useEffect, useRef, useState, useSyncExternalStore } from "react";
+import {
+  type ReactNode,
+  useEffect,
+  useRef,
+  useState,
+  useSyncExternalStore,
+} from "react";
 import type { Photo } from "@/content/photos";
 
 const INTERVAL_MS = 6500;
@@ -16,10 +22,13 @@ function subscribeReducedMotion(callback: () => void) {
 /**
  * Crossfading hero photographs with a slow zoom on the active slide.
  *
- * Accessibility: a visible pause/play control (WCAG 2.2.2); autoplay stops
- * while the pointer or keyboard focus is inside; never autoplays under
- * prefers-reduced-motion; each slide has a labelled button; only the active
- * image is exposed to assistive technology.
+ * The visible chrome is just a room label; visitors swipe to move on.
+ *
+ * Accessibility: previous / pause / next buttons appear on keyboard focus
+ * (WCAG 2.2.2 pause mechanism); autoplay stops while the pointer or focus is
+ * inside; never autoplays under prefers-reduced-motion; the label is
+ * announced only when not autoplaying; only the active image is exposed to
+ * assistive technology.
  */
 export function HeroCarousel({ slides }: { slides: Photo[] }) {
   const [active, setActive] = useState(0);
@@ -96,54 +105,104 @@ export function HeroCarousel({ slides }: { slides: Photo[] }) {
         ))}
       </div>
 
-      <p
-        className="absolute top-4 right-4 hidden max-w-[70%] truncate rounded-full bg-pine-950/55 px-3 py-1.5 text-xs font-semibold tracking-wide text-ivory backdrop-blur sm:block"
-        aria-live="polite"
+      {/* Soft top scrim so the room label reads over bright skies and walls. */}
+      <div
+        aria-hidden="true"
+        className="pointer-events-none absolute inset-x-0 top-0 h-2/5 bg-gradient-to-b from-pine-950/50 to-transparent"
+      />
+
+      {/* Room label in place of dots: number, hairline, and the room in serif. */}
+      <div
+        aria-live={playing ? "off" : "polite"}
+        className="pointer-events-none absolute top-5 left-5 text-ivory [text-shadow:0_1px_12px_rgba(20,39,31,0.45)] sm:top-7 sm:left-7 lg:right-8 lg:left-auto lg:text-right"
       >
-        {slides[active]?.caption}
-      </p>
-      <div className="absolute top-3 right-3 flex items-center justify-end gap-3 sm:top-14 sm:right-4">
-        <div className="flex shrink-0 items-center gap-1 rounded-full bg-pine-950/55 p-1 backdrop-blur">
-          {slides.map((slide, i) => (
-            <button
-              key={slide.id}
-              type="button"
-              onClick={() => setActive(i)}
-              aria-label={`Show photo ${i + 1} of ${slides.length}: ${slide.caption}`}
-              aria-current={i === active ? "true" : undefined}
-              className="flex size-8 items-center justify-center rounded-full"
-            >
-              <span
-                className={`block h-1.5 rounded-full bg-ivory transition-all duration-500 ${
-                  i === active ? "w-5 opacity-100" : "w-1.5 opacity-60"
-                }`}
-              />
-            </button>
-          ))}
-          {!reducedMotion && slides.length > 1 && (
-            <button
-              type="button"
-              onClick={() => setPaused((p) => !p)}
-              aria-label={paused ? "Play slideshow" : "Pause slideshow"}
-              className="flex size-8 items-center justify-center rounded-full text-ivory"
-            >
-              <svg
-                aria-hidden="true"
-                width="14"
-                height="14"
-                viewBox="0 0 14 14"
-                fill="currentColor"
-              >
-                {paused ? (
-                  <path d="M3 1.5v11l9-5.5z" />
-                ) : (
-                  <path d="M3 1.5h3v11H3zM8 1.5h3v11H8z" />
-                )}
-              </svg>
-            </button>
-          )}
-        </div>
+        <p key={active} className="caption-in">
+          <span className="flex items-center gap-3 text-[0.7rem] font-semibold tracking-[0.28em] text-ivory/85 lg:justify-end">
+            <span>{String(active + 1).padStart(2, "0")}</span>
+            <span aria-hidden="true" className="h-px w-8 bg-ivory/70" />
+            <span>{String(slides.length).padStart(2, "0")}</span>
+          </span>
+          <span className="sr-only">
+            Photo {active + 1} of {slides.length}:{" "}
+          </span>
+          <span className="mt-2 block font-display text-2xl leading-tight italic sm:text-3xl">
+            {slides[active]?.caption}
+          </span>
+        </p>
       </div>
+
+      {/* Controls stay out of sight for touch and mouse (swipe, and autoplay
+          pauses on hover) but appear for keyboard users, keeping a pause
+          mechanism for WCAG 2.2.2. */}
+      {slides.length > 1 && (
+        <div className="absolute top-3 right-3 flex gap-1 rounded-full bg-pine-950/70 p-1 opacity-0 backdrop-blur transition-opacity has-focus-visible:opacity-100 lg:top-auto lg:right-6 lg:bottom-6">
+          <ControlButton
+            label="Previous photo"
+            onClick={() =>
+              setActive((i) => (i - 1 + slides.length) % slides.length)
+            }
+          >
+            <path
+              d="M9 2 4 7l5 5"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="1.6"
+            />
+          </ControlButton>
+          {!reducedMotion && (
+            <ControlButton
+              label={paused ? "Play slideshow" : "Pause slideshow"}
+              onClick={() => setPaused((p) => !p)}
+            >
+              {paused ? (
+                <path d="M3 1.5v11l9-5.5z" />
+              ) : (
+                <path d="M3 1.5h3v11H3zM8 1.5h3v11H8z" />
+              )}
+            </ControlButton>
+          )}
+          <ControlButton
+            label="Next photo"
+            onClick={() => setActive((i) => (i + 1) % slides.length)}
+          >
+            <path
+              d="m5 2 5 5-5 5"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="1.6"
+            />
+          </ControlButton>
+        </div>
+      )}
     </div>
+  );
+}
+
+function ControlButton({
+  label,
+  onClick,
+  children,
+}: {
+  label: string;
+  onClick: () => void;
+  children: ReactNode;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      aria-label={label}
+      className="flex size-11 items-center justify-center rounded-full text-ivory"
+    >
+      <svg
+        aria-hidden="true"
+        width="14"
+        height="14"
+        viewBox="0 0 14 14"
+        fill="currentColor"
+      >
+        {children}
+      </svg>
+    </button>
   );
 }
