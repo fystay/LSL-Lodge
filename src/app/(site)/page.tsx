@@ -42,10 +42,10 @@ export default function HomePage() {
 function Hero() {
   return (
     <section aria-labelledby="hero-title" className="relative overflow-hidden">
-      {/* Decorative ripple lines echoing the water. */}
+      {/* Decorative ripple lines echoing the water (desktop only: on phones they show through the faded photo). */}
       <svg
         aria-hidden="true"
-        className="pointer-events-none absolute -top-24 -left-40 h-[40rem] w-[60rem] text-sage-300/50"
+        className="pointer-events-none absolute -top-24 -left-40 hidden h-[40rem] w-[60rem] text-sage-300/50 lg:block"
         viewBox="0 0 600 400"
         fill="none"
       >
