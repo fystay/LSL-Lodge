@@ -35,25 +35,51 @@ export function GalleryProvider({
   children: ReactNode;
 }) {
   const dialogRef = useRef<HTMLDialogElement>(null);
+  const trackRef = useRef<HTMLDivElement>(null);
   const openerRef = useRef<HTMLElement | null>(null);
   const [index, setIndex] = useState(0);
   const current = photos[index];
 
+  /** Scrolls the swipe track to a photo (instantly when opening). */
+  const scrollToIndex = (i: number, behavior: ScrollBehavior) => {
+    const track = trackRef.current;
+    if (!track) return;
+    const target = (i + photos.length) % photos.length;
+    track.scrollTo({ left: target * track.clientWidth, behavior });
+  };
+
   const open = useCallback(
     (id: string, opener: HTMLElement | null) => {
       openerRef.current = opener;
-      setIndex(
-        Math.max(
-          0,
-          photos.findIndex((p) => p.id === id),
-        ),
+      const i = Math.max(
+        0,
+        photos.findIndex((p) => p.id === id),
       );
+      setIndex(i);
       dialogRef.current?.showModal();
+      // Jump straight to the chosen photo once the dialog has laid out.
+      requestAnimationFrame(() => {
+        const track = trackRef.current;
+        if (track)
+          track.scrollTo({ left: i * track.clientWidth, behavior: "instant" });
+      });
     },
     [photos],
   );
-  const step = (delta: number) =>
-    setIndex((i) => (i + delta + photos.length) % photos.length);
+
+  // Keep the caption and counter in step with swiping.
+  const onScroll = () => {
+    const track = trackRef.current;
+    if (!track || track.clientWidth === 0) return;
+    const i = Math.round(track.scrollLeft / track.clientWidth);
+    if (i !== index && i >= 0 && i < photos.length) setIndex(i);
+  };
+
+  const smooth = (): ScrollBehavior =>
+    window.matchMedia("(prefers-reduced-motion: reduce)").matches
+      ? "instant"
+      : "smooth";
+
   const value = useMemo(
     () => ({ open, count: photos.length }),
     [open, photos.length],
@@ -67,42 +93,139 @@ export function GalleryProvider({
         aria-label="Photo viewer"
         onClose={() => openerRef.current?.focus()}
         onKeyDown={(event) => {
-          if (event.key === "ArrowRight") step(1);
-          if (event.key === "ArrowLeft") step(-1);
+          if (event.key === "ArrowRight") {
+            event.preventDefault();
+            scrollToIndex(index + 1, smooth());
+          }
+          if (event.key === "ArrowLeft") {
+            event.preventDefault();
+            scrollToIndex(index - 1, smooth());
+          }
         }}
-        className="m-auto max-h-none w-[min(100vw-1rem,64rem)] max-w-none rounded-soft bg-pine-950 p-0 text-ivory backdrop:bg-pine-950/90 backdrop:backdrop-blur-sm"
+        className="m-auto max-h-none w-[min(100vw-1rem,64rem)] max-w-none overflow-hidden rounded-soft bg-pine-950 p-0 text-ivory backdrop:bg-pine-950/90 backdrop:backdrop-blur-sm"
       >
-        {current && (
-          <figure className="p-2 sm:p-4">
-            <div className="relative flex h-[min(72vh,60rem)] items-center justify-center">
-              <Image
-                key={current.id}
-                src={current.image}
-                alt={current.alt}
-                sizes="(min-width: 64rem) 64rem, 100vw"
-                placeholder="blur"
-                className="h-auto max-h-full w-auto max-w-full rounded-sm object-contain motion-safe:animate-[fade-in_300ms_ease-out]"
-              />
-            </div>
-            <figcaption className="mt-3 flex flex-wrap items-center justify-between gap-3 px-1">
-              <span aria-live="polite">
-                {current.caption}{" "}
-                <span className="text-sage-300">
-                  ({index + 1} of {photos.length})
-                </span>
-              </span>
-              <span className="flex gap-2">
-                <ViewerButton onClick={() => step(-1)}>Previous</ViewerButton>
-                <ViewerButton onClick={() => step(1)}>Next</ViewerButton>
-                <ViewerButton onClick={() => dialogRef.current?.close()}>
-                  Close
-                </ViewerButton>
-              </span>
-            </figcaption>
-          </figure>
-        )}
+        <div className="relative">
+          {/* Swipe track: native, momentum scrolling with snap points. */}
+          <div
+            ref={trackRef}
+            onScroll={onScroll}
+            className="flex h-[min(76vh,60rem)] snap-x snap-mandatory [scrollbar-width:none] overflow-x-auto overscroll-x-contain [&::-webkit-scrollbar]:hidden"
+          >
+            {photos.map((p, i) => (
+              <div
+                key={p.id}
+                aria-hidden={i !== index}
+                className="flex h-full w-full shrink-0 snap-center snap-always items-center justify-center p-2 sm:p-4"
+              >
+                <Image
+                  src={p.image}
+                  alt={i === index ? p.alt : ""}
+                  sizes="(min-width: 64rem) 64rem, 100vw"
+                  placeholder="blur"
+                  loading={Math.abs(i - index) <= 1 ? "eager" : "lazy"}
+                  draggable={false}
+                  className="h-full w-full object-contain select-none"
+                  // Fill the frame, but never beyond the photo's real size.
+                  style={{ maxWidth: p.image.width, maxHeight: p.image.height }}
+                />
+              </div>
+            ))}
+          </div>
+
+          {/* Mouse users can't swipe: show quiet arrows only for fine pointers. */}
+          <ArrowButton
+            side="left"
+            label="Previous photo"
+            onClick={() => scrollToIndex(index - 1, smooth())}
+          />
+          <ArrowButton
+            side="right"
+            label="Next photo"
+            onClick={() => scrollToIndex(index + 1, smooth())}
+          />
+
+          <button
+            type="button"
+            onClick={() => dialogRef.current?.close()}
+            aria-label="Close photo viewer"
+            className="absolute top-3 right-3 flex size-11 items-center justify-center rounded-full bg-pine-950/60 text-ivory backdrop-blur hover:bg-pine-800"
+          >
+            <svg
+              aria-hidden="true"
+              width="18"
+              height="18"
+              viewBox="0 0 18 18"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="1.8"
+              strokeLinecap="round"
+            >
+              <path d="M4 4l10 10M14 4L4 14" />
+            </svg>
+          </button>
+        </div>
+
+        <div className="flex items-center justify-between gap-3 px-4 pt-1 pb-4">
+          <p aria-live="polite">
+            {current?.caption}{" "}
+            <span className="text-sage-300">
+              ({index + 1} of {photos.length})
+            </span>
+          </p>
+          <p className="text-sm text-sage-300 pointer-fine:hidden">
+            Swipe for more
+          </p>
+        </div>
+        {/* Progress dots double as a sense of place in the set. */}
+        <div aria-hidden="true" className="flex justify-center gap-1 pb-4">
+          {photos.map((p, i) => (
+            <span
+              key={p.id}
+              className={`h-1 rounded-full bg-ivory transition-all duration-300 ${i === index ? "w-4 opacity-100" : "w-1 opacity-40"}`}
+            />
+          ))}
+        </div>
       </dialog>
     </GalleryContext.Provider>
+  );
+}
+
+function ArrowButton({
+  side,
+  label,
+  onClick,
+}: {
+  side: "left" | "right";
+  label: string;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      aria-label={label}
+      className={`absolute top-1/2 hidden size-11 -translate-y-1/2 items-center justify-center rounded-full bg-pine-950/50 text-ivory opacity-70 backdrop-blur transition-opacity hover:opacity-100 pointer-fine:flex ${
+        side === "left" ? "left-3" : "right-3"
+      }`}
+    >
+      <svg
+        aria-hidden="true"
+        width="18"
+        height="18"
+        viewBox="0 0 18 18"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.8"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      >
+        {side === "left" ? (
+          <path d="M11 3L5 9l6 6" />
+        ) : (
+          <path d="M7 3l6 6-6 6" />
+        )}
+      </svg>
+    </button>
   );
 }
 
@@ -136,22 +259,4 @@ export function GalleryButton({
 
 export function useGalleryCount() {
   return useContext(GalleryContext)?.count ?? 0;
-}
-
-function ViewerButton({
-  onClick,
-  children,
-}: {
-  onClick: () => void;
-  children: string;
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      className="min-h-11 rounded-soft border border-sage-100/40 px-4 text-sm font-semibold hover:bg-pine-800"
-    >
-      {children}
-    </button>
-  );
 }

@@ -1,7 +1,7 @@
 "use client";
 
 import Image from "next/image";
-import { useEffect, useState, useSyncExternalStore } from "react";
+import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import type { Photo } from "@/content/photos";
 
 const INTERVAL_MS = 6500;
@@ -25,6 +25,7 @@ export function HeroCarousel({ slides }: { slides: Photo[] }) {
   const [active, setActive] = useState(0);
   const [paused, setPaused] = useState(false);
   const [hovering, setHovering] = useState(false);
+  const touchStart = useRef<{ x: number; y: number } | null>(null);
   const reducedMotion = useSyncExternalStore(
     subscribeReducedMotion,
     () => window.matchMedia(reducedMotionQuery).matches,
@@ -48,6 +49,23 @@ export function HeroCarousel({ slides }: { slides: Photo[] }) {
       aria-label="Photographs of the lodge"
       className="relative h-full w-full"
       onMouseEnter={() => setHovering(true)}
+      // Horizontal swipe on touch screens moves between slides.
+      onTouchStart={(event) => {
+        const t = event.touches[0];
+        touchStart.current = { x: t.clientX, y: t.clientY };
+      }}
+      onTouchEnd={(event) => {
+        const start = touchStart.current;
+        touchStart.current = null;
+        if (!start) return;
+        const t = event.changedTouches[0];
+        const dx = t.clientX - start.x;
+        const dy = t.clientY - start.y;
+        if (Math.abs(dx) < 40 || Math.abs(dx) < Math.abs(dy)) return;
+        setActive(
+          (i) => (i + (dx < 0 ? 1 : -1) + slides.length) % slides.length,
+        );
+      }}
       onMouseLeave={() => setHovering(false)}
       onFocus={() => setHovering(true)}
       onBlur={(event) => {

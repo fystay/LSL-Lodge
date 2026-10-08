@@ -1,5 +1,6 @@
 import { GalleryButton, GalleryProvider } from "@/components/gallery";
 import { PhotoFrame } from "@/components/photo";
+import { SectionNav } from "@/components/section-nav";
 import {
   ButtonLink,
   Container,
@@ -77,25 +78,7 @@ export default function StayPage() {
         </Container>
       </header>
 
-      <nav
-        aria-label="On this page"
-        className="sticky top-18 z-30 border-b border-sage-300/60 bg-ivory/95 backdrop-blur"
-      >
-        <Container>
-          <ul className="flex gap-1 overflow-x-auto py-2">
-            {sections.map((s) => (
-              <li key={s.id}>
-                <a
-                  href={`#${s.id}`}
-                  className="inline-flex min-h-11 items-center rounded-full px-4 text-sm font-semibold whitespace-nowrap text-pine-900 hover:bg-sage-100"
-                >
-                  {s.label}
-                </a>
-              </li>
-            ))}
-          </ul>
-        </Container>
-      </nav>
+      <SectionNav sections={sections} />
 
       <Space
         id="living"
@@ -120,7 +103,7 @@ export default function StayPage() {
       <section
         id="bedrooms"
         aria-labelledby="bedrooms-title"
-        className="scroll-mt-32 py-16 sm:py-20"
+        className="scroll-mt-36 py-16 sm:py-20"
       >
         <Container>
           <div className="reveal max-w-2xl">
@@ -187,7 +170,7 @@ export default function StayPage() {
       <section
         id="details"
         aria-labelledby="details-title"
-        className="scroll-mt-32 border-t border-sage-300/60 bg-limestone/60"
+        className="scroll-mt-36 border-t border-sage-300/60 bg-limestone/60"
       >
         <Container className="grid gap-12 py-14 sm:py-16 lg:grid-cols-[1fr_1.4fr]">
           <h2 id="details-title" className="text-title">
@@ -278,7 +261,7 @@ function Space({
     <section
       id={id}
       aria-labelledby={`${id}-title`}
-      className={`scroll-mt-32 py-16 sm:py-20 ${tinted ? "bg-limestone/60" : ""}`}
+      className={`scroll-mt-36 py-16 sm:py-20 ${tinted ? "bg-limestone/60" : ""}`}
     >
       <Container className="grid gap-10 lg:grid-cols-[1fr_1.6fr] lg:items-start">
         <div className="reveal lg:sticky lg:top-40">

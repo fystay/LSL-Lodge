@@ -173,6 +173,12 @@
   }
 }
 
+@media (prefers-reduced-motion: no-preference) {
+  html {
+    scroll-behavior: smooth;
+  }
+}
+
 @layer components {
   /* Gentle entrance for hero copy on first paint. */
   .enter {

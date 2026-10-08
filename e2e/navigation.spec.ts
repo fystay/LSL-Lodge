@@ -139,3 +139,75 @@ test("hero slideshow never autoplays for visitors who prefer reduced motion", as
     carousel.getByRole("button", { name: /Show photo 1 of 4/ }),
   ).toHaveAttribute("aria-current", "true");
 });
+
+test("photo viewer moves by swiping, and the counter follows", async ({
+  page,
+}) => {
+  await page.goto("/stay");
+  await page.getByRole("button", { name: "View all 21 photos" }).click();
+  const viewer = page.getByRole("dialog", { name: "Photo viewer" });
+  await expect(viewer).toContainText("1 of 21");
+  // A swipe is a horizontal scroll of the snap track.
+  await viewer
+    .locator(".snap-x")
+    .evaluate((track) =>
+      track.scrollBy({ left: track.clientWidth, behavior: "instant" }),
+    );
+  await expect(viewer).toContainText("2 of 21");
+});
+
+test("arrow buttons appear only for mouse users; touch users swipe", async ({
+  page,
+  isMobile,
+}) => {
+  await page.goto("/stay");
+  await page.getByRole("button", { name: "View all 21 photos" }).click();
+  const next = page.getByRole("button", { name: "Next photo" });
+  if (isMobile) {
+    await expect(next).toBeHidden();
+    await expect(page.getByText("Swipe for more")).toBeVisible();
+  } else {
+    await expect(next).toBeVisible();
+    await next.click();
+    await expect(
+      page.getByRole("dialog", { name: "Photo viewer" }),
+    ).toContainText("2 of 21");
+  }
+});
+
+test("section links underline the section you are in", async ({ page }) => {
+  await page.goto("/stay");
+  const nav = page.getByRole("navigation", { name: "On this page" });
+  await nav.getByRole("link", { name: "Bedrooms" }).click();
+  await expect(nav.getByRole("link", { name: "Bedrooms" })).toHaveAttribute(
+    "aria-current",
+    "location",
+  );
+  await expect(nav.locator('[aria-current="location"]')).toHaveCount(1);
+
+  // Scrolling (not clicking) moves the marker too.
+  await page.locator("#outside").scrollIntoViewIfNeeded();
+  await page.evaluate(() =>
+    window.scrollTo({
+      top: document.getElementById("outside")!.offsetTop - 150,
+      behavior: "instant",
+    }),
+  );
+  await expect(nav.getByRole("link", { name: "Outside" })).toHaveAttribute(
+    "aria-current",
+    "location",
+  );
+});
+
+test("the last section is underlined at the bottom of the page", async ({
+  page,
+}) => {
+  await page.goto("/stay");
+  const nav = page.getByRole("navigation", { name: "On this page" });
+  await nav.getByRole("link", { name: "Details" }).click();
+  await page.waitForTimeout(1_300);
+  await expect(nav.getByRole("link", { name: "Details" })).toHaveAttribute(
+    "aria-current",
+    "location",
+  );
+});
