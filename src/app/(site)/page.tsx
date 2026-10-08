@@ -62,8 +62,8 @@ function Hero() {
         ))}
       </svg>
 
-      <Container className="relative grid gap-6 pt-4 pb-12 sm:gap-10 sm:pt-8 lg:grid-cols-[1fr_1.05fr] lg:items-center lg:gap-16 lg:pt-12 lg:pb-20">
-        <div className="order-2 lg:order-1">
+      <Container className="grid pb-12 lg:min-h-[44rem] lg:grid-cols-2 lg:items-center lg:gap-16 lg:pt-12 lg:pb-20">
+        <div className="relative z-10 order-2 -mt-14 sm:-mt-20 lg:order-1 lg:mt-0">
           {/* Booking search first: visible as soon as the page opens. */}
           <div className="enter">
             <BookingSearch
@@ -96,21 +96,10 @@ function Hero() {
           </div>
         </div>
 
-        <div className="relative order-1 lg:order-2">
-          <div className="relative mx-auto aspect-[16/10] w-full max-w-[34rem] shadow-[0_40px_80px_-40px_rgba(20,39,31,0.6)] sm:aspect-[5/4] lg:aspect-[4/5] lg:max-h-[80vh]">
+        {/* Full-bleed photo that fades into the page: right half on desktop, edge to edge on phones. */}
+        <div className="relative order-1 -mx-4 aspect-[16/11] sm:-mx-6 sm:aspect-[16/10] lg:absolute lg:inset-y-0 lg:right-0 lg:mx-0 lg:aspect-auto lg:w-1/2">
+          <div className="hero-fade absolute inset-0">
             <HeroCarousel slides={heroSlides} />
-          </div>
-          {/* Floating secondary photo (desktop), drifting gently on scroll. */}
-          <div className="parallax absolute -bottom-10 -left-12 hidden w-56 lg:block xl:w-64">
-            <GalleryButton photo={photo("deck-view-fountain")}>
-              <PhotoFrame
-                photo={photo("deck-view-fountain")}
-                sizes="16rem"
-                aspect="aspect-[4/3]"
-                zoomOnHover
-                className="rounded-2xl border-4 border-ivory shadow-[0_24px_50px_-24px_rgba(20,39,31,0.6)]"
-              />
-            </GalleryButton>
           </div>
         </div>
       </Container>

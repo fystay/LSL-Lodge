@@ -11,7 +11,7 @@ export const siteIndexable = process.env.SITE_INDEXABLE === "true";
 export const bookingOpen = false;
 
 export const primaryNav = [
-  { href: "/stay", label: "The lodge" },
+  { href: "/stay", label: "The Lodge" },
   { href: "/location", label: "Location" },
   { href: "/information", label: "Information" },
   { href: "/contact", label: "Contact" },

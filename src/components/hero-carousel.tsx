@@ -73,7 +73,7 @@ export function HeroCarousel({ slides }: { slides: Photo[] }) {
           setHovering(false);
       }}
     >
-      <div className="absolute inset-0 overflow-hidden rounded-[1.25rem] bg-mist">
+      <div className="absolute inset-0 overflow-hidden">
         {slides.map((slide, i) => (
           <div
             key={slide.id}
@@ -87,26 +87,22 @@ export function HeroCarousel({ slides }: { slides: Photo[] }) {
               alt={i === active ? slide.alt : ""}
               fill
               priority={i === 0}
-              sizes="(min-width: 1024px) 34rem, 100vw"
+              sizes="(min-width: 1024px) 50vw, 100vw"
               placeholder="blur"
               className={`object-cover ${i === active ? "slide-zoom" : ""}`}
               style={{ objectPosition: slide.focus ?? "center" }}
             />
           </div>
         ))}
-        <div
-          aria-hidden="true"
-          className="pointer-events-none absolute inset-x-0 bottom-0 h-1/3 bg-gradient-to-t from-pine-950/55 to-transparent"
-        />
       </div>
 
       <p
-        className="absolute top-4 left-4 max-w-[70%] truncate rounded-full bg-pine-950/55 px-3 py-1.5 text-xs font-semibold tracking-wide text-ivory backdrop-blur"
+        className="absolute top-4 right-4 hidden max-w-[70%] truncate rounded-full bg-pine-950/55 px-3 py-1.5 text-xs font-semibold tracking-wide text-ivory backdrop-blur sm:block"
         aria-live="polite"
       >
         {slides[active]?.caption}
       </p>
-      <div className="absolute right-4 bottom-4 flex items-center justify-end gap-3">
+      <div className="absolute top-3 right-3 flex items-center justify-end gap-3 sm:top-14 sm:right-4">
         <div className="flex shrink-0 items-center gap-1 rounded-full bg-pine-950/55 p-1 backdrop-blur">
           {slides.map((slide, i) => (
             <button

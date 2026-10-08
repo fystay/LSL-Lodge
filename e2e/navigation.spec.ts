@@ -42,7 +42,7 @@ test("desktop navigation reaches every primary page", async ({
   await page.goto("/");
   const nav = page.getByRole("navigation", { name: "Main" });
   for (const [name, path] of [
-    ["The lodge", "/stay"],
+    ["The Lodge", "/stay"],
     ["Location", "/location"],
     ["Information", "/information"],
     ["Contact", "/contact"],

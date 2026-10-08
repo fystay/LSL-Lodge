@@ -14,7 +14,7 @@ import { pageMetadata } from "@/lib/metadata";
 
 export const metadata = pageMetadata(
   "/stay",
-  "The lodge",
+  "The Lodge",
   "Inside Lodge on the Lake: open-plan living, three bedrooms, bathroom and a deck over the water.",
 );
 
@@ -36,7 +36,7 @@ export default function StayPage() {
         <Container className="grid gap-10 py-12 sm:py-16 lg:grid-cols-[1fr_1.3fr] lg:items-center">
           <div>
             <p className="enter text-sm font-semibold tracking-[0.18em] text-wood uppercase">
-              The lodge
+              The Lodge
             </p>
             <h1 className="enter enter-delay-1 mt-3 text-title">
               A lodge to settle into
