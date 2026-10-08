@@ -20,7 +20,7 @@ const heroSlides = [
   photo("lodge-across-water"),
   photo("living-room-media-wall"),
   photo("kitchen-island"),
-  photo("deck-evening"),
+  photo("bathroom"),
 ];
 
 const allPhotos = galleryOrder.flatMap((space) => photosIn(space));
