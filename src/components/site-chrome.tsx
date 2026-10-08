@@ -13,6 +13,7 @@ export function SiteChrome({ children }: { children: ReactNode }) {
         Skip to content
       </a>
       <div
+        id="site-notice"
         role="note"
         className="bg-notice px-4 py-2 text-center text-sm text-notice-ink"
       >
@@ -20,6 +21,13 @@ export function SiteChrome({ children }: { children: ReactNode }) {
         &ldquo;To be confirmed&rdquo; are awaiting the owner.
       </div>
       <SiteHeader />
+      {/* Runs before first paint: exposes the banner + header height as
+          --chrome-h so the homepage hero can fill exactly the first screen. */}
+      <script
+        dangerouslySetInnerHTML={{
+          __html: `(function(){var n=document.getElementById("site-notice"),h=document.getElementById("site-header");if(!n||!h)return;function s(){document.documentElement.style.setProperty("--chrome-h",n.offsetHeight+h.offsetHeight+"px")}s();addEventListener("resize",s)})()`,
+        }}
+      />
       <main id="main" className="flex-1">
         {children}
       </main>

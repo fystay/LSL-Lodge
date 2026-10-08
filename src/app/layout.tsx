@@ -44,6 +44,8 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
     <html
       lang="en-GB"
       data-scroll-behavior="smooth"
+      // An inline script in SiteChrome sets --chrome-h on <html> before hydration.
+      suppressHydrationWarning
       className={`${display.variable} ${sans.variable} h-full antialiased`}
     >
       <body className="flex min-h-full flex-col bg-ivory text-ink">

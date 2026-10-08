@@ -62,44 +62,52 @@ function Hero() {
         ))}
       </svg>
 
-      <Container className="grid pb-12 lg:min-h-[44rem] lg:grid-cols-2 lg:items-center lg:gap-16 lg:pt-12 lg:pb-20">
-        <div className="relative z-10 order-2 -mt-14 sm:-mt-20 lg:order-1 lg:mt-0">
-          {/* Booking search first: visible as soon as the page opens. */}
-          <div className="enter">
-            <BookingSearch
-              variant="hero"
-              maxGuests={searchLimits.maxGuests}
-              minNights={searchLimits.minNights}
-              timeZone={TIME_ZONE}
-            />
+      <Container className="pb-12 lg:grid lg:min-h-[44rem] lg:grid-cols-2 lg:items-center lg:gap-16 lg:pt-12 lg:pb-20">
+        <div>
+          {/* Phones and tablets: photo and booking search together fill exactly
+              the first screen below the header; the rest waits for a scroll. */}
+          <div className="flex h-[calc(100svh-var(--chrome-h,8rem))] min-h-[28rem] flex-col pb-3 lg:block lg:h-auto lg:min-h-0 lg:pb-0">
+            {/* Full-bleed photo that fades into the page: right half on desktop, edge to edge on phones. */}
+            <div className="relative -mx-4 min-h-0 flex-1 sm:-mx-6 lg:absolute lg:inset-y-0 lg:right-0 lg:mx-0 lg:w-1/2">
+              <div className="hero-fade absolute inset-0">
+                <HeroCarousel slides={heroSlides} />
+              </div>
+            </div>
+            {/* Booking search first: visible as soon as the page opens. */}
+            <div className="enter relative z-10 -mt-14 sm:-mt-20 lg:mt-0">
+              <BookingSearch
+                variant="hero"
+                maxGuests={searchLimits.maxGuests}
+                minNights={searchLimits.minNights}
+                timeZone={TIME_ZONE}
+              />
+            </div>
+          </div>
+          <div className="relative z-10">
             <p className="mt-2 text-xs text-ink-muted">
               Online booking opens soon. Searching shows what to expect; nothing
               is reserved.
             </p>
-          </div>
-          <p className="enter enter-delay-1 mt-10 text-sm font-semibold tracking-[0.18em] text-wood uppercase">
-            {property.location.setting.value}
-          </p>
-          <h1 id="hero-title" className="enter enter-delay-1 mt-4 text-display">
-            Slow mornings, <em className="text-pine-700">lake light</em>, and
-            room to breathe.
-          </h1>
-          <p className="enter enter-delay-2 mt-6 max-w-xl text-lg leading-relaxed text-ink-muted">
-            A three-bedroom lodge with its deck right over the water,{" "}
-            {property.location.region.value}. Coffee on the deck, evenings under
-            the lights, and nowhere you need to be.
-          </p>
-          <div className="enter enter-delay-3 mt-8 flex flex-wrap gap-3">
-            <ButtonLink href="/stay" variant="secondary">
-              Explore the lodge
-            </ButtonLink>
-          </div>
-        </div>
-
-        {/* Full-bleed photo that fades into the page: right half on desktop, edge to edge on phones. */}
-        <div className="relative order-1 -mx-4 aspect-[16/11] sm:-mx-6 sm:aspect-[16/10] lg:absolute lg:inset-y-0 lg:right-0 lg:mx-0 lg:aspect-auto lg:w-1/2">
-          <div className="hero-fade absolute inset-0">
-            <HeroCarousel slides={heroSlides} />
+            <p className="enter enter-delay-1 mt-10 text-sm font-semibold tracking-[0.18em] text-wood uppercase">
+              {property.location.setting.value}
+            </p>
+            <h1
+              id="hero-title"
+              className="enter enter-delay-1 mt-4 text-display"
+            >
+              Slow mornings, <em className="text-pine-700">lake light</em>, and
+              room to breathe.
+            </h1>
+            <p className="enter enter-delay-2 mt-6 max-w-xl text-lg leading-relaxed text-ink-muted">
+              A three-bedroom lodge with its deck right over the water,{" "}
+              {property.location.region.value}. Coffee on the deck, evenings
+              under the lights, and nowhere you need to be.
+            </p>
+            <div className="enter enter-delay-3 mt-8 flex flex-wrap gap-3">
+              <ButtonLink href="/stay" variant="secondary">
+                Explore the lodge
+              </ButtonLink>
+            </div>
           </div>
         </div>
       </Container>

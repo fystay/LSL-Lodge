@@ -5,7 +5,10 @@ import { Container, buttonClasses } from "./ui";
 
 export function SiteHeader() {
   return (
-    <header className="sticky top-0 z-40 border-b border-sage-300/70 bg-ivory/95 backdrop-blur supports-[backdrop-filter]:bg-ivory/85">
+    <header
+      id="site-header"
+      className="sticky top-0 z-40 border-b border-sage-300/70 bg-ivory/95 backdrop-blur supports-[backdrop-filter]:bg-ivory/85"
+    >
       <Container className="flex h-18 items-center justify-between gap-6">
         <Link
           href="/"
