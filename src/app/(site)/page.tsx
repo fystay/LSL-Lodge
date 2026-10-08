@@ -16,11 +16,12 @@ export const metadata = pageMetadata(
 
 const TIME_ZONE = "Europe/London";
 
+// Each slide carries a short label for the pill in the photo's corner.
 const heroSlides = [
-  photo("lodge-across-water"),
-  photo("living-room-media-wall"),
-  photo("kitchen-island"),
-  photo("bathroom"),
+  { ...photo("lodge-across-water"), label: "The lodge" },
+  { ...photo("living-room-media-wall"), label: "The lounge" },
+  { ...photo("kitchen-island"), label: "The kitchen" },
+  { ...photo("bathroom"), label: "The bathroom" },
 ];
 
 const allPhotos = galleryOrder.flatMap((space) => photosIn(space));
