@@ -1,4 +1,6 @@
+import { PhotoFrame } from "@/components/photo";
 import { Container, DraftNotice, FactText, PageHeader } from "@/components/ui";
+import { photo } from "@/content/photos";
 import { property } from "@/content/property";
 import { pageMetadata } from "@/lib/metadata";
 
@@ -17,6 +19,20 @@ export default function LocationPage() {
           {property.location.region.value}.
         </p>
       </PageHeader>
+
+      <Container className="pt-12 sm:pt-14">
+        <figure className="mx-auto max-w-[75rem]">
+          <PhotoFrame
+            photo={photo("deck-view-fountain")}
+            aspect="aspect-[16/9]"
+            sizes="(min-width: 1152px) 72rem, 100vw"
+            priority
+          />
+          <figcaption className="mt-2 text-sm text-ink-muted">
+            The view from the deck across the water.
+          </figcaption>
+        </figure>
+      </Container>
 
       <Container className="grid gap-12 py-14 sm:py-16 lg:grid-cols-[1fr_1.2fr]">
         <section aria-labelledby="address-title">

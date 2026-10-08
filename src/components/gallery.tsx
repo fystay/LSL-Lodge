@@ -1,76 +1,92 @@
 "use client";
 
-import { useRef, useState } from "react";
+import Image from "next/image";
+import {
+  createContext,
+  useCallback,
+  useContext,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
 import type { Photo } from "@/content/photos";
-import { PhotoFrame } from "./photo";
 
 /**
- * Grid of photographs with an accessible full-screen viewer. Uses the native
- * <dialog> element for focus containment, Escape-to-close and an inert
- * background. Each thumbnail is a real button, so the gallery is fully
- * keyboard operable; arrow keys move between photos inside the viewer.
+ * Shared full-screen photo viewer. Any <GalleryButton> on the page opens it
+ * at that photo. Uses the native <dialog> for focus containment,
+ * Escape-to-close and an inert background; arrow keys step through photos;
+ * focus returns to whichever button opened it. The viewer shows the whole
+ * photo (object-contain) at no more than its natural size.
  */
-export function Gallery({ photos }: { photos: Photo[] }) {
+
+interface GalleryContextValue {
+  open: (id: string, opener: HTMLElement | null) => void;
+  count: number;
+}
+
+const GalleryContext = createContext<GalleryContextValue | null>(null);
+
+export function GalleryProvider({
+  photos,
+  children,
+}: {
+  photos: Photo[];
+  children: ReactNode;
+}) {
   const dialogRef = useRef<HTMLDialogElement>(null);
-  const triggerRefs = useRef<(HTMLButtonElement | null)[]>([]);
-  const openerRef = useRef(0);
+  const openerRef = useRef<HTMLElement | null>(null);
   const [index, setIndex] = useState(0);
   const current = photos[index];
 
-  const open = (i: number) => {
-    openerRef.current = i;
-    setIndex(i);
-    dialogRef.current?.showModal();
-  };
+  const open = useCallback(
+    (id: string, opener: HTMLElement | null) => {
+      openerRef.current = opener;
+      setIndex(
+        Math.max(
+          0,
+          photos.findIndex((p) => p.id === id),
+        ),
+      );
+      dialogRef.current?.showModal();
+    },
+    [photos],
+  );
   const step = (delta: number) =>
     setIndex((i) => (i + delta + photos.length) % photos.length);
+  const value = useMemo(
+    () => ({ open, count: photos.length }),
+    [open, photos.length],
+  );
 
   return (
-    <>
-      <ul className="grid grid-cols-2 gap-3 sm:gap-4 lg:grid-cols-3">
-        {photos.map((photo, i) => (
-          <li key={photo.id} className={i === 0 ? "col-span-2 row-span-2" : ""}>
-            <button
-              ref={(el) => {
-                triggerRefs.current[i] = el;
-              }}
-              type="button"
-              onClick={() => open(i)}
-              className="group block w-full rounded-soft text-left"
-              aria-label={`View ${photo.caption ?? photo.brief} larger`}
-            >
-              <PhotoFrame
-                photo={photo}
-                sizes={
-                  i === 0
-                    ? "(min-width: 1024px) 66vw, 100vw"
-                    : "(min-width: 1024px) 33vw, 50vw"
-                }
-                aspect={i === 0 ? "aspect-[4/3]" : "aspect-square"}
-                className="transition-opacity duration-300 ease-calm motion-safe:group-hover:opacity-90"
-              />
-            </button>
-          </li>
-        ))}
-      </ul>
-
+    <GalleryContext.Provider value={value}>
+      {children}
       <dialog
         ref={dialogRef}
         aria-label="Photo viewer"
-        // Return focus to the thumbnail that opened the viewer.
-        onClose={() => triggerRefs.current[openerRef.current]?.focus()}
+        onClose={() => openerRef.current?.focus()}
         onKeyDown={(event) => {
           if (event.key === "ArrowRight") step(1);
           if (event.key === "ArrowLeft") step(-1);
         }}
-        className="m-auto w-[min(100vw-2rem,72rem)] max-w-none rounded-soft bg-pine-950 p-0 text-ivory backdrop:bg-pine-950/80"
+        className="m-auto max-h-none w-[min(100vw-1rem,64rem)] max-w-none rounded-soft bg-pine-950 p-0 text-ivory backdrop:bg-pine-950/90 backdrop:backdrop-blur-sm"
       >
         {current && (
-          <figure className="p-3 sm:p-5">
-            <PhotoFrame photo={current} sizes="100vw" aspect="aspect-[3/2]" />
-            <figcaption className="mt-3 flex flex-wrap items-center justify-between gap-3">
+          <figure className="p-2 sm:p-4">
+            <div className="relative flex h-[min(72vh,60rem)] items-center justify-center">
+              <Image
+                key={current.id}
+                src={current.image}
+                alt={current.alt}
+                sizes="(min-width: 64rem) 64rem, 100vw"
+                placeholder="blur"
+                className="h-auto max-h-full w-auto max-w-full rounded-sm object-contain motion-safe:animate-[fade-in_300ms_ease-out]"
+              />
+            </div>
+            <figcaption className="mt-3 flex flex-wrap items-center justify-between gap-3 px-1">
               <span aria-live="polite">
-                {current.caption ?? current.brief}{" "}
+                {current.caption}{" "}
                 <span className="text-sage-300">
                   ({index + 1} of {photos.length})
                 </span>
@@ -86,8 +102,40 @@ export function Gallery({ photos }: { photos: Photo[] }) {
           </figure>
         )}
       </dialog>
-    </>
+    </GalleryContext.Provider>
   );
+}
+
+/** Makes its children a button that opens the viewer at `photo`. */
+export function GalleryButton({
+  photo,
+  label,
+  className = "",
+  bare = false,
+  children,
+}: {
+  photo: Pick<Photo, "id" | "caption">;
+  label?: string;
+  className?: string;
+  /** Skip the default block/full-width styling (for button-like triggers). */
+  bare?: boolean;
+  children: ReactNode;
+}) {
+  const gallery = useContext(GalleryContext);
+  return (
+    <button
+      type="button"
+      onClick={(event) => gallery?.open(photo.id, event.currentTarget)}
+      aria-label={label ?? `View ${photo.caption} larger`}
+      className={`${bare ? "" : "group block w-full cursor-zoom-in text-left"} rounded-soft ${className}`}
+    >
+      {children}
+    </button>
+  );
+}
+
+export function useGalleryCount() {
+  return useContext(GalleryContext)?.count ?? 0;
 }
 
 function ViewerButton({

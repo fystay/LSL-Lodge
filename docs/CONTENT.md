@@ -25,24 +25,39 @@ A site-wide preview banner and `noindex` stay in place until launch
 
 ## Photography
 
-`src/content/photos.ts` is the manifest. Every entry is currently a labelled,
-abstract placeholder ("Photograph to come: …"); none depicts the lodge.
+`src/content/photos.ts` is the manifest; files live in `src/assets/photos/`.
 
-**Rules:** owner-approved photographs only. Nothing copied or hotlinked from
-Airbnb, and no AI-generated images of the property.
+**Source and permission:** 21 photos from the owner's Airbnb listing, supplied
+in October 2026 (uploaded by the developer, not scraped from Airbnb), with the
+owner's permission to use them on this site. Each was re-saved without
+metadata (phone photos can carry GPS coordinates). Airbnb's own graphics and
+guest profile pictures are never used.
 
-**Shot list:** exterior and setting at golden hour; view from the deck; living
-area; kitchen and dining; each bedroom; bathrooms; nearby landscape or walks.
-A wide hero (landscape, at least 2400 px) and some portrait crops for mobile
-are helpful.
+**Quality:** most files are only 720 px on the long edge (the deck/fountain
+view is 1,200 px). Layouts deliberately show them at or near natural size, for
+example the editorial hero frame rather than a full-screen hero. **Ask the
+owner for the original camera files:** with those, the hero can go full-width
+and every photo will be sharper on high-resolution screens. Swap files by
+replacing them in `src/assets/photos/` under the same names.
 
-**Delivery:** JPEG or WebP, sRGB, at least 2400 px on the long edge, with
-written permission to use. For each photo, add `src`, `width`, `height`, alt
-text describing what is actually in the picture, an optional `focus` crop
-point, and `status: "approved"`. `next/image` handles responsive sizes and
-modern formats.
+**To confirm with the owner** (also noted as `confirm` in the manifest):
+
+- Room grouping: main bedroom (double, floral prints), second bedroom (double,
+  tall upholstered headboard), twin bedroom. This is inferred from the photos.
+- Which bedroom has the walk-in wardrobe.
+- Two living-room layouts appear (a stove, and a media wall with an electric
+  fire). Which is current? The site leads with the media wall.
+- Only one bathroom is pictured; the listing says two.
+- Whether the fire table in the covered seating area is available to guests.
+  The site doesn't mention it.
+
+**Motion:** the hero crossfades four portrait photos with a slow zoom, with a
+pause button, pausing on hover or focus, and no autoplay under reduced-motion
+settings. Sections fade up on scroll where the browser supports scroll-driven
+animations. All of it is decorative and switched off for reduced motion.
 
 ## Structured data and Open Graph images
 
-Deliberately omitted until the facts and photos are verified (charter §3).
-Add `LodgingBusiness`/`VacationRental` JSON-LD and an OG image at launch.
+Open Graph image: `src/app/opengraph-image.jpg` (the deck/fountain view,
+1200×630). Structured data (`LodgingBusiness`/`VacationRental` JSON-LD) is
+still deliberately omitted until the facts are verified (charter §3).

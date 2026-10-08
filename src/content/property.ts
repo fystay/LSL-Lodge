@@ -27,6 +27,12 @@ const fromBrief = <T>(value: T): Fact<T> => ({
   source: "Owner brief / reference listing — confirm before launch",
 });
 
+const fromPhotos = <T>(value: T): Fact<T> => ({
+  value,
+  status: "unverified",
+  source: "Inferred from the listing photos — confirm before launch",
+});
+
 const placeholder = <T>(value: T): Fact<T> => ({
   value,
   status: "unverified",
@@ -47,8 +53,40 @@ export const property = {
   sleeps: fromBrief(6),
   bedrooms: fromBrief(3),
   bathrooms: fromBrief(2),
-  /** Room-by-room bed configuration, supplied by the owner. */
-  bedConfiguration: placeholder<string[] | null>(null),
+  /** Room-by-room bed configuration. */
+  bedConfiguration: fromPhotos<string[] | null>([
+    "Main bedroom: double",
+    "Second bedroom: double",
+    "Twin bedroom: two singles",
+  ]),
+  /** Bedrooms as pictured; `space` matches the photo groups in src/content/photos.ts. */
+  bedroomList: [
+    {
+      space: "main-bedroom" as const,
+      name: "Main bedroom",
+      beds: fromPhotos("Double bed"),
+    },
+    {
+      space: "second-bedroom" as const,
+      name: "Second bedroom",
+      beds: fromPhotos("Double bed"),
+    },
+    {
+      space: "twin-bedroom" as const,
+      name: "Twin bedroom",
+      beds: fromPhotos("Two single beds"),
+    },
+  ],
+  /** Visible in the listing photos; to be confirmed as available to guests. */
+  pictured: [
+    fromPhotos("Open-plan living, dining and kitchen"),
+    fromPhotos("Kitchen island with bar stools"),
+    fromPhotos("Separate utility room with second sink"),
+    fromPhotos("Electric fire and wall-mounted TV"),
+    fromPhotos("Walk-in wardrobe"),
+    fromPhotos("Deck with dining and lounge seating over the water"),
+    fromPhotos("Covered seating area with lighting"),
+  ],
   /** Only features the owner has confirmed may be listed here as verified. */
   features: [fromBrief("Lake views"), fromBrief("Decking")],
   checkInTime: placeholder<string | null>(null),

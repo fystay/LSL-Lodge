@@ -1,3 +1,4 @@
+import { settleAnimations } from "./support";
 import { expect, test, type Page } from "@playwright/test";
 
 /**
@@ -109,6 +110,7 @@ test("booking pages have no automatically detectable WCAG A/AA violations", asyn
 }) => {
   const AxeBuilder = (await import("@axe-core/playwright")).default;
   const scan = async (label: string) => {
+    await settleAnimations(page);
     const results = await new AxeBuilder({ page })
       .withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa", "wcag22aa"])
       .analyze();

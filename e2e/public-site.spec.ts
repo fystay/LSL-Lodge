@@ -1,4 +1,5 @@
 import AxeBuilder from "@axe-core/playwright";
+import { settleAnimations } from "./support";
 import { expect, test } from "@playwright/test";
 
 const publicPages = [
@@ -23,6 +24,8 @@ for (const { path, heading } of publicPages) {
     await expect(page.getByRole("heading", { level: 1 })).toHaveCount(1);
     await expect(page.getByRole("heading", { level: 1 })).toHaveText(heading);
     await expect(page.getByRole("main")).toBeVisible();
+
+    await settleAnimations(page);
 
     const results = await new AxeBuilder({ page })
       .withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa", "wcag22aa"])
@@ -85,10 +88,23 @@ test("unconfirmed facts are visibly marked", async ({ page }) => {
   );
 });
 
-test("photo placeholders are labelled as placeholders, not presented as the lodge", async ({
-  page,
-}) => {
-  await page.goto("/stay");
-  const placeholders = page.getByRole("img", { name: /^Photograph to come:/ });
-  expect(await placeholders.count()).toBeGreaterThan(0);
+test("every photograph has a meaningful description", async ({ page }) => {
+  for (const path of ["/", "/stay", "/location"]) {
+    await page.goto(path);
+    const images = page.locator("main img");
+    const count = await images.count();
+    expect(count, path).toBeGreaterThan(0);
+    for (let i = 0; i < count; i++) {
+      const img = images.nth(i);
+      // Inactive carousel slides are hidden from assistive tech and carry alt="".
+      const hidden = await img.evaluate(
+        (el) => el.closest("[aria-hidden='true']") !== null,
+      );
+      if (!hidden)
+        expect(
+          (await img.getAttribute("alt"))?.length ?? 0,
+          path,
+        ).toBeGreaterThan(20);
+    }
+  }
 });

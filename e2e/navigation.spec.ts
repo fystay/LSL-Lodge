@@ -56,16 +56,14 @@ test("gallery viewer opens from the keyboard, steps through photos and restores 
   page,
 }) => {
   await page.goto("/stay");
-  const first = page.getByRole("button", {
-    name: /View The lodge and the lake larger/,
-  });
+  const first = page.getByRole("button", { name: "View all 21 photos" });
   await first.focus();
   await page.keyboard.press("Enter");
   const viewer = page.getByRole("dialog", { name: "Photo viewer" });
   await expect(viewer).toBeVisible();
-  await expect(viewer).toContainText("1 of 9");
+  await expect(viewer).toContainText("1 of 21");
   await page.keyboard.press("ArrowRight");
-  await expect(viewer).toContainText("2 of 9");
+  await expect(viewer).toContainText("2 of 21");
   await page.keyboard.press("Escape");
   await expect(viewer).toBeHidden();
   await expect(first).toBeFocused();
@@ -93,4 +91,51 @@ test("contact form validates on the server and admits it cannot send yet", async
   await expect(page.getByRole("textbox", { name: "Message" })).toHaveValue(
     "Is the lodge available at Easter?",
   );
+});
+
+test("gallery opens at the photo that was clicked", async ({ page }) => {
+  await page.goto("/stay");
+  await page.getByRole("button", { name: "View Twin bedroom larger" }).click();
+  const viewer = page.getByRole("dialog", { name: "Photo viewer" });
+  await expect(viewer).toContainText("Twin bedroom");
+  await expect(viewer.getByRole("img")).toHaveAttribute(
+    "alt",
+    /Twin bedroom with two single beds/,
+  );
+});
+
+test("hero slideshow can be paused and slides chosen directly", async ({
+  page,
+}) => {
+  await page.emulateMedia({ reducedMotion: "no-preference" });
+  await page.goto("/");
+  const carousel = page.getByRole("group", {
+    name: "Photographs of the lodge",
+  });
+  await carousel.getByRole("button", { name: "Pause slideshow" }).click();
+  await expect(
+    carousel.getByRole("button", { name: "Play slideshow" }),
+  ).toBeVisible();
+  await carousel.getByRole("button", { name: /Show photo 2 of 4/ }).click();
+  await expect(
+    carousel.getByRole("button", { name: /Show photo 2 of 4/ }),
+  ).toHaveAttribute("aria-current", "true");
+  await expect(carousel).toContainText("Evenings on the deck");
+});
+
+test("hero slideshow never autoplays for visitors who prefer reduced motion", async ({
+  page,
+}) => {
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  await page.goto("/");
+  const carousel = page.getByRole("group", {
+    name: "Photographs of the lodge",
+  });
+  await expect(carousel.getByRole("button", { name: /slideshow/ })).toHaveCount(
+    0,
+  );
+  await page.waitForTimeout(7_500);
+  await expect(
+    carousel.getByRole("button", { name: /Show photo 1 of 4/ }),
+  ).toHaveAttribute("aria-current", "true");
 });

@@ -1,3 +1,4 @@
+import { settleAnimations } from "./support";
 import { expect, test, type Page } from "@playwright/test";
 
 /**
@@ -145,6 +146,7 @@ test("admin pages have no automatically detectable WCAG A/AA violations", async 
     "/admin/settings",
   ]) {
     await page.goto(path);
+    await settleAnimations(page);
     const results = await new AxeBuilder({ page })
       .withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa", "wcag22aa"])
       .analyze();
