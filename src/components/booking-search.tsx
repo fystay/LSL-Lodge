@@ -205,14 +205,14 @@ function HeroSearch({
       method="get"
       aria-label="Search dates"
       noValidate
-      className="rounded-3xl border border-sage-300/70 bg-ivory p-4 shadow-[0_24px_60px_-34px_rgba(20,39,31,0.6)] sm:p-7"
+      className="rounded-3xl border border-sage-300/70 bg-ivory p-3.5 shadow-[0_24px_60px_-34px_rgba(20,39,31,0.6)] sm:p-5"
     >
-      <p className="flex items-center gap-3 font-display text-2xl text-pine-900 sm:text-[1.75rem]">
-        <CalendarIcon className="size-7 text-pine-800" />
+      <p className="flex items-center gap-2 px-0.5 font-display text-xl text-pine-900 sm:text-2xl">
+        <CalendarIcon className="size-5 text-pine-800 sm:size-6" />
         Check availability
       </p>
 
-      <div className="mt-5 grid grid-cols-2 gap-3 sm:gap-4">
+      <div className="mt-3 grid grid-cols-2 gap-2.5 sm:gap-3">
         <HeroDateField
           id={`${id}-in`}
           name="checkIn"
@@ -236,17 +236,9 @@ function HeroSearch({
         />
       </div>
 
-      <p
-        id={`${id}-out-hint`}
-        className="mt-3 flex items-center gap-2.5 text-sm text-ink-muted"
-      >
-        <span aria-hidden="true" className="h-px w-5 bg-ink-muted/70" />
-        Minimum stay: {minNights} nights
-      </p>
-
       <button
         type="submit"
-        className="mt-5 flex min-h-13 w-full items-center justify-center gap-3 rounded-full bg-pine-800 px-6 text-base font-semibold text-ivory transition-colors duration-200 hover:bg-pine-700"
+        className="mt-3 flex min-h-12 w-full items-center justify-center gap-3 rounded-full bg-pine-800 px-6 text-base font-semibold text-ivory transition-colors duration-200 hover:bg-pine-700"
       >
         Check availability
         <svg
@@ -265,7 +257,7 @@ function HeroSearch({
       </button>
 
       {/* Guests as a quiet footer line between hairlines. */}
-      <div className="mt-4 flex items-center gap-4">
+      <div className="mt-1.5 flex items-center gap-3">
         <span aria-hidden="true" className="h-px flex-1 bg-sage-300" />
         <div className="relative flex items-center gap-2 text-sm text-ink-muted">
           <svg
@@ -314,7 +306,7 @@ function HeroSearch({
           >
             <path d="m2 3.5 3 3 3-3" />
           </svg>
-          <span>· sleeps up to {maxGuests}</span>
+          <span id={`${id}-out-hint`}>· min. stay {minNights} nights</span>
         </div>
         <span aria-hidden="true" className="h-px flex-1 bg-sage-300" />
       </div>
@@ -357,22 +349,27 @@ function HeroDateField({
       .join(" ") || undefined;
   return (
     <div className="min-w-0">
-      <label htmlFor={id} className="text-sm font-semibold text-pine-900">
-        {label}
-      </label>
       {/* The native input sits invisibly on top, so a tap opens the
           platform's own date picker; the styled text below mirrors it. */}
       <div
-        className={`relative mt-1.5 flex min-h-13 items-center gap-2 rounded-xl border bg-ivory px-3 transition-colors focus-within:border-pine-700 focus-within:ring-2 focus-within:ring-pine-700/25 sm:gap-2.5 sm:px-4 ${
+        className={`relative flex min-h-14 items-center gap-2.5 rounded-xl border bg-ivory px-3 transition-colors focus-within:border-pine-700 focus-within:ring-2 focus-within:ring-pine-700/25 sm:gap-2.5 sm:px-4 ${
           error ? "border-danger" : "border-sage-300 hover:border-sage-600/60"
         }`}
       >
         <CalendarIcon className="size-[1.125rem] shrink-0 text-pine-800 sm:size-5" />
-        <span
-          aria-hidden="true"
-          className={`truncate text-[0.95rem] sm:text-base ${shown ? "text-ink" : "text-ink-muted"}`}
-        >
-          {shown ?? "Select date"}
+        <span className="flex min-w-0 flex-col leading-tight">
+          <label
+            htmlFor={id}
+            className="text-[0.7rem] font-semibold tracking-[0.12em] text-pine-900 uppercase"
+          >
+            {label}
+          </label>
+          <span
+            aria-hidden="true"
+            className={`truncate text-[0.95rem] ${shown ? "text-ink" : "text-ink-muted"}`}
+          >
+            {shown ?? "Select date"}
+          </span>
         </span>
         <input
           id={id}
