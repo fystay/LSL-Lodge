@@ -120,7 +120,7 @@ test("hero slideshow can be paused and slides chosen directly", async ({
   await expect(
     carousel.getByRole("button", { name: /Show photo 2 of 4/ }),
   ).toHaveAttribute("aria-current", "true");
-  await expect(carousel).toContainText("Evenings on the deck");
+  await expect(carousel).toContainText("Living and dining");
 });
 
 test("hero slideshow never autoplays for visitors who prefer reduced motion", async ({

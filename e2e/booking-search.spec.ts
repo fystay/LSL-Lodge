@@ -19,7 +19,7 @@ test("a valid search shows the dates and says plainly that booking isn't open", 
   await form.getByLabel("Check-in").fill(isoInDays(30));
   await form.getByLabel("Check-out").fill(isoInDays(33));
   await form.getByLabel("Guests").selectOption("4");
-  await form.getByRole("button", { name: "Search" }).click();
+  await form.getByRole("button", { name: "Check availability" }).click();
 
   await expect(page).toHaveURL(
     /\/availability\?checkIn=.*&checkOut=.*&guests=4/,
@@ -71,7 +71,9 @@ test("the booking form is the first thing on the homepage, visible without scrol
   const form = page.getByRole("form", { name: "Search dates" });
   await expect(form).toBeInViewport();
   await expect(form.getByLabel("Check-in")).toBeInViewport();
-  await expect(form.getByRole("button", { name: "Search" })).toBeInViewport();
+  await expect(
+    form.getByRole("button", { name: "Check availability" }),
+  ).toBeInViewport();
   // It comes before the location line and the main heading.
   const formTop = (await form.boundingBox())!.y;
   const headingTop = (await page
