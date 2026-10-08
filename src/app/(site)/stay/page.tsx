@@ -59,22 +59,26 @@ export default function StayPage() {
               </GalleryButton>
             </div>
           </div>
-          <div className="grid grid-cols-3 grid-rows-2 gap-3">
+          {/* The collage has one fixed shape and every photo fills its cell,
+              so the right-hand pair always meets the large photo's edges. */}
+          <div className="grid aspect-[3/2] grid-cols-3 grid-rows-2 gap-3">
             <Tile
               p={photo("living-room-media-wall")}
-              className="col-span-2 row-span-2"
-              aspect="aspect-[4/3] h-full"
+              className="col-span-2 row-span-2 h-full"
+              aspect="h-full w-full"
               sizes="(min-width: 1024px) 28rem, 66vw"
               priority
             />
             <Tile
               p={photo("lodge-across-water")}
-              aspect="aspect-square h-full"
+              className="h-full"
+              aspect="h-full w-full"
               sizes="(min-width: 1024px) 14rem, 33vw"
             />
             <Tile
               p={photo("main-bedroom")}
-              aspect="aspect-square h-full"
+              className="h-full"
+              aspect="h-full w-full"
               sizes="(min-width: 1024px) 14rem, 33vw"
             />
           </div>
