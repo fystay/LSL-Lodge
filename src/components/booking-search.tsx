@@ -23,7 +23,8 @@ export function BookingSearch({
   timeZone: string;
   defaults?: Partial<Record<SearchField, string>>;
   errors?: { field: SearchField; message: string }[];
-  variant?: "panel" | "inline";
+  /** panel: wide bar; inline: no card; hero: compact card at the top of the homepage. */
+  variant?: "panel" | "inline" | "hero";
 }) {
   const id = useId();
   // "Today" is only known in the browser: the page itself is prerendered, so a
@@ -54,11 +55,18 @@ export function BookingSearch({
       aria-label="Search dates"
       noValidate
       className={
-        variant === "panel"
-          ? "grid gap-4 rounded-soft bg-ivory p-5 shadow-[0_20px_50px_-30px_rgba(20,39,31,0.55)] sm:grid-cols-2 sm:p-6 lg:grid-cols-[1fr_1fr_0.8fr_auto] lg:items-start"
-          : "grid gap-4 sm:grid-cols-2 lg:grid-cols-[1fr_1fr_0.8fr_auto] lg:items-start"
+        variant === "hero"
+          ? "grid grid-cols-2 items-start gap-x-3 gap-y-4 rounded-2xl border border-sage-300/70 bg-ivory p-4 shadow-[0_24px_60px_-34px_rgba(20,39,31,0.6)] sm:gap-x-4 sm:p-6"
+          : variant === "panel"
+            ? "grid gap-4 rounded-soft bg-ivory p-5 shadow-[0_20px_50px_-30px_rgba(20,39,31,0.55)] sm:grid-cols-2 sm:p-6 lg:grid-cols-[1fr_1fr_0.8fr_auto] lg:items-start"
+            : "grid gap-4 sm:grid-cols-2 lg:grid-cols-[1fr_1fr_0.8fr_auto] lg:items-start"
       }
     >
+      {variant === "hero" && (
+        <p className="col-span-2 -mb-1 font-display text-xl text-pine-900 sm:text-2xl">
+          Check availability
+        </p>
+      )}
       <div>
         <label
           htmlFor={`${id}-in`}
@@ -131,9 +139,13 @@ export function BookingSearch({
       </div>
       <button
         type="submit"
-        className="min-h-12 rounded-soft bg-pine-800 px-6 font-semibold text-ivory transition-colors duration-200 hover:bg-pine-700 sm:col-span-2 lg:col-span-1 lg:mt-[1.625rem]"
+        className={`min-h-12 rounded-soft bg-pine-800 px-4 font-semibold text-ivory transition-colors duration-200 hover:bg-pine-700 sm:px-6 ${
+          variant === "hero"
+            ? "mt-[1.625rem]"
+            : "sm:col-span-2 lg:col-span-1 lg:mt-[1.625rem]"
+        }`}
       >
-        Check availability
+        {variant === "hero" ? "Search" : "Check availability"}
       </button>
     </form>
   );

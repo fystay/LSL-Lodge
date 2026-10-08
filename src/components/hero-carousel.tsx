@@ -100,13 +100,13 @@ export function HeroCarousel({ slides }: { slides: Photo[] }) {
         />
       </div>
 
-      <div className="absolute inset-x-4 bottom-4 flex items-center justify-between gap-3">
-        <p
-          className="min-w-0 truncate text-sm font-medium text-ivory drop-shadow"
-          aria-live="polite"
-        >
-          {slides[active]?.caption}
-        </p>
+      <p
+        className="absolute top-4 left-4 max-w-[70%] truncate rounded-full bg-pine-950/55 px-3 py-1.5 text-xs font-semibold tracking-wide text-ivory backdrop-blur"
+        aria-live="polite"
+      >
+        {slides[active]?.caption}
+      </p>
+      <div className="absolute right-4 bottom-4 flex items-center justify-end gap-3">
         <div className="flex shrink-0 items-center gap-1 rounded-full bg-pine-950/55 p-1 backdrop-blur">
           {slides.map((slide, i) => (
             <button

@@ -62,9 +62,22 @@ function Hero() {
         ))}
       </svg>
 
-      <Container className="relative grid gap-10 pt-8 pb-10 sm:pt-12 lg:grid-cols-[1fr_1.05fr] lg:items-center lg:gap-16 lg:pt-16 lg:pb-16">
+      <Container className="relative grid gap-6 pt-4 pb-12 sm:gap-10 sm:pt-8 lg:grid-cols-[1fr_1.05fr] lg:items-center lg:gap-16 lg:pt-12 lg:pb-20">
         <div className="order-2 lg:order-1">
-          <p className="enter text-sm font-semibold tracking-[0.18em] text-wood uppercase">
+          {/* Booking search first: visible as soon as the page opens. */}
+          <div className="enter">
+            <BookingSearch
+              variant="hero"
+              maxGuests={searchLimits.maxGuests}
+              minNights={searchLimits.minNights}
+              timeZone={TIME_ZONE}
+            />
+            <p className="mt-2 text-xs text-ink-muted">
+              Online booking opens soon. Searching shows what to expect; nothing
+              is reserved.
+            </p>
+          </div>
+          <p className="enter enter-delay-1 mt-10 text-sm font-semibold tracking-[0.18em] text-wood uppercase">
             {property.location.setting.value}
           </p>
           <h1 id="hero-title" className="enter enter-delay-1 mt-4 text-display">
@@ -77,7 +90,6 @@ function Hero() {
             the lights, and nowhere you need to be.
           </p>
           <div className="enter enter-delay-3 mt-8 flex flex-wrap gap-3">
-            <ButtonLink href="/availability">Check availability</ButtonLink>
             <ButtonLink href="/stay" variant="secondary">
               Explore the lodge
             </ButtonLink>
@@ -85,11 +97,11 @@ function Hero() {
         </div>
 
         <div className="relative order-1 lg:order-2">
-          <div className="relative mx-auto aspect-[4/5] max-h-[78vh] w-full max-w-[34rem] shadow-[0_40px_80px_-40px_rgba(20,39,31,0.6)] sm:aspect-[5/6]">
+          <div className="relative mx-auto aspect-[16/10] w-full max-w-[34rem] shadow-[0_40px_80px_-40px_rgba(20,39,31,0.6)] sm:aspect-[5/4] lg:aspect-[4/5] lg:max-h-[80vh]">
             <HeroCarousel slides={heroSlides} />
           </div>
           {/* Floating secondary photo (desktop), drifting gently on scroll. */}
-          <div className="parallax absolute top-10 -left-20 hidden w-56 lg:block xl:w-64">
+          <div className="parallax absolute -bottom-10 -left-12 hidden w-56 lg:block xl:w-64">
             <GalleryButton photo={photo("deck-view-fountain")}>
               <PhotoFrame
                 photo={photo("deck-view-fountain")}
@@ -101,19 +113,6 @@ function Hero() {
             </GalleryButton>
           </div>
         </div>
-      </Container>
-
-      <Container className="relative pb-14 lg:pb-20">
-        <h2 className="sr-only">Search dates</h2>
-        <BookingSearch
-          maxGuests={searchLimits.maxGuests}
-          minNights={searchLimits.minNights}
-          timeZone={TIME_ZONE}
-        />
-        <p className="mt-3 text-sm text-ink-muted">
-          Online booking opens soon. Searching now shows what to expect; nothing
-          is reserved.
-        </p>
       </Container>
     </section>
   );
