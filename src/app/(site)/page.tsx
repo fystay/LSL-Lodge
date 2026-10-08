@@ -18,9 +18,9 @@ const TIME_ZONE = "Europe/London";
 
 const heroSlides = [
   photo("lodge-across-water"),
+  photo("living-room-media-wall"),
+  photo("second-bedroom-detail"),
   photo("deck-evening"),
-  photo("main-bedroom-art"),
-  photo("detail-roses"),
 ];
 
 const allPhotos = galleryOrder.flatMap((space) => photosIn(space));
