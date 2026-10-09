@@ -1,41 +1,211 @@
 import { notFound } from "next/navigation";
 import { Suspense } from "react";
-import { AdminSection, NotReady, statusLabel } from "@/components/admin-ui";
+import {
+  AdminSection,
+  FormStatus,
+  NotReady,
+  inputClass,
+  primaryButton,
+  smallButton,
+  statusLabel,
+} from "@/components/admin-ui";
 import { QuoteSummary } from "@/components/quote-summary";
 import { formatStayDate, type IsoDate } from "@/lib/dates";
 import { formatMoney } from "@/lib/money";
 import { adminContext } from "@/server/admin/context";
-import { reservationDetail } from "@/server/admin/data";
+import { reservationConflicts, reservationDetail } from "@/server/admin/data";
+import { paymentsConfigured } from "@/server/payments/gateway";
 import type { Quote } from "@/server/pricing/quote";
+import { approveRequestAction, declineRequestAction } from "../../../actions";
 
 export const metadata = { title: "Booking" };
 
+const SOURCE_LABEL: Record<string, string> = {
+  OWNER_BLOCK: "Your blocked dates",
+  AIRBNB_ICAL: "Airbnb (imported calendar)",
+  GOOGLE: "Google Calendar",
+  OTHER_ICAL: "Imported calendar",
+  CHANNEL_MANAGER: "Channel manager",
+  DIRECT_BOOKING: "Another website booking",
+  HOLD: "Another request or hold",
+};
+
+const REVIEW_REASON: Record<string, string> = {
+  PAYMENT_AFTER_EXPIRY:
+    "Payment arrived after the booking lapsed. Decide whether to honour the booking or refund.",
+  PAYMENT_AFTER_EXPIRY_REFUND_REQUIRED:
+    "Payment arrived after the booking lapsed and the dates had been re-booked. The payment must be refunded.",
+  AMOUNT_MISMATCH:
+    "The amount paid doesn’t match the agreed price. Check the payment in Stripe.",
+  CALENDAR_CONFLICT:
+    "Payment was received, but another calendar now overlaps these dates. Resolve the clash before confirming.",
+  DUPLICATE_PAYMENT:
+    "A second payment was received for an already confirmed booking. Refund the duplicate.",
+  NOT_APPROVED: "Payment was received for a request that was never approved.",
+};
+
+const when = (d: Date | null) =>
+  d
+    ? new Intl.DateTimeFormat("en-GB", {
+        dateStyle: "medium",
+        timeStyle: "short",
+        timeZone: "Europe/London",
+      }).format(d)
+    : "—";
+
 export default function BookingDetailPage({
   params,
+  searchParams,
 }: PageProps<"/admin/bookings/[id]">) {
   return (
     <Suspense fallback={<p>Loading…</p>}>
-      <Detail params={params} />
+      <Detail params={params} searchParams={searchParams} />
     </Suspense>
   );
 }
 
 async function Detail({
   params,
+  searchParams,
 }: {
   params: PageProps<"/admin/bookings/[id]">["params"];
+  searchParams: PageProps<"/admin/bookings/[id]">["searchParams"];
 }) {
   const { id } = await params;
+  const { saved, error } = await searchParams;
   const ctx = await adminContext();
   if (!ctx.ready) return <NotReady reason={ctx.reason} />;
   const detail = await reservationDetail(ctx.db, ctx.property.id, id);
   if (!detail) notFound();
-  const { reservation: r, schedule, payments, history } = detail;
+  const { reservation: r, schedule, payments, history, notifications } = detail;
   const quote = r.quoteSnapshot as Quote;
+  const pending = r.status === "REQUESTED";
+  const conflicts =
+    pending || r.status === "APPROVED" || r.status === "REQUIRES_REVIEW"
+      ? await reservationConflicts(
+          ctx.db,
+          r,
+          ctx.property.turnoverNights,
+          ctx.now,
+        )
+      : [];
+  const reason = r.reviewReason
+    ? (REVIEW_REASON[r.reviewReason] ?? r.reviewReason)
+    : null;
 
   return (
     <>
       <h1 className="text-title">Booking {r.publicRef}</h1>
+      <div className="mt-4">
+        <FormStatus
+          saved={typeof saved === "string" ? saved : undefined}
+          error={typeof error === "string" ? error : undefined}
+        />
+      </div>
+
+      {reason && (
+        <p
+          role="alert"
+          className="mt-4 rounded-soft border border-danger/40 bg-ivory p-4 font-medium text-danger"
+        >
+          Needs your attention: {reason}
+        </p>
+      )}
+
+      {pending && (
+        <div className="mt-6">
+          <AdminSection id="decision" title="Your decision">
+            <p>
+              Respond by <strong>{when(r.holdExpiresAt)}</strong> (UK time).
+              After that the request lapses and the dates are released. The
+              guest has not been charged.
+            </p>
+            {conflicts.length > 0 ? (
+              <div
+                role="alert"
+                className="mt-3 rounded-soft border border-danger/40 bg-ivory p-3 text-danger"
+              >
+                <p className="font-semibold">
+                  These dates now overlap other calendar entries:
+                </p>
+                <ul className="mt-1 list-disc pl-5">
+                  {conflicts.map((c) => (
+                    <li key={c}>{SOURCE_LABEL[c] ?? c}</li>
+                  ))}
+                </ul>
+                <p className="mt-1">
+                  Approval is blocked until the clash is resolved.
+                </p>
+              </div>
+            ) : (
+              <p className="mt-2 text-sm text-ink-muted">
+                No clashes with your blocked dates or imported calendars as of
+                their last sync. Imported calendars (such as Airbnb) can lag
+                behind, so check them if in doubt.
+              </p>
+            )}
+            {!paymentsConfigured() && (
+              <p className="mt-3 rounded-soft border border-notice-ink/30 bg-notice p-3 text-notice-ink">
+                Card payments aren&rsquo;t configured on this site, so an
+                approved guest won&rsquo;t be able to pay yet.
+              </p>
+            )}
+            <div className="mt-5 grid gap-6 md:grid-cols-2">
+              <form action={approveRequestAction} className="space-y-3">
+                <input type="hidden" name="id" value={r.id} />
+                <label htmlFor="approve-note" className="block font-semibold">
+                  Private note (optional)
+                </label>
+                <textarea
+                  id="approve-note"
+                  name="ownerNote"
+                  maxLength={1000}
+                  rows={2}
+                  className={inputClass}
+                />
+                <p className="text-sm text-ink-muted">
+                  The guest will be asked to pay{" "}
+                  {formatMoney(r.totalMinor, r.currency)} within{" "}
+                  {ctx.property.paymentWindowHours} hours.
+                </p>
+                <button
+                  type="submit"
+                  className={primaryButton}
+                  disabled={conflicts.length > 0}
+                >
+                  Approve request
+                </button>
+              </form>
+              <form action={declineRequestAction} className="space-y-3">
+                <input type="hidden" name="id" value={r.id} />
+                <label htmlFor="decline-note" className="block font-semibold">
+                  Private note (optional, not sent to the guest)
+                </label>
+                <textarea
+                  id="decline-note"
+                  name="ownerNote"
+                  maxLength={1000}
+                  rows={2}
+                  className={inputClass}
+                />
+                <label className="flex min-h-11 items-center gap-3">
+                  <input
+                    type="checkbox"
+                    name="confirm"
+                    value="yes"
+                    className="size-5"
+                  />
+                  <span>Yes, decline this request</span>
+                </label>
+                <button type="submit" className={smallButton}>
+                  Decline request
+                </button>
+              </form>
+            </div>
+          </AdminSection>
+        </div>
+      )}
+
       <div className="mt-6 grid gap-6 lg:grid-cols-2">
         <AdminSection id="stay" title="Stay">
           <dl className="grid grid-cols-[9rem_1fr] gap-y-2">
@@ -56,13 +226,40 @@ async function Detail({
             <dd>{r.guestPhone ?? "—"}</dd>
             <dt className="font-semibold">Source</dt>
             <dd>{r.source === "DIRECT" ? "Website" : "Entered by owner"}</dd>
-            {r.holdExpiresAt && r.status === "PENDING_PAYMENT" && (
+            <dt className="font-semibold">Requested</dt>
+            <dd>{when(r.createdAt)}</dd>
+            {r.approvedAt && (
               <>
-                <dt className="font-semibold">Hold expires</dt>
+                <dt className="font-semibold">Approved</dt>
                 <dd>
-                  {r.holdExpiresAt.toISOString().slice(0, 16).replace("T", " ")}{" "}
-                  UTC
+                  {when(r.approvedAt)} by {r.approvedBy}
                 </dd>
+              </>
+            )}
+            {r.declinedAt && (
+              <>
+                <dt className="font-semibold">Declined</dt>
+                <dd>
+                  {when(r.declinedAt)} by {r.declinedBy}
+                </dd>
+              </>
+            )}
+            {r.status === "APPROVED" && (
+              <>
+                <dt className="font-semibold">Pay by</dt>
+                <dd>{when(r.holdExpiresAt)}</dd>
+              </>
+            )}
+            {r.confirmedAt && (
+              <>
+                <dt className="font-semibold">Confirmed</dt>
+                <dd>{when(r.confirmedAt)}</dd>
+              </>
+            )}
+            {r.ownerNote && (
+              <>
+                <dt className="font-semibold">Your note</dt>
+                <dd className="whitespace-pre-line">{r.ownerNote}</dd>
               </>
             )}
           </dl>
@@ -86,18 +283,52 @@ async function Detail({
               </li>
             ))}
           </ul>
-          <p className="mt-3 text-sm text-ink-muted">
-            {payments.length === 0
-              ? "No payments recorded. Card payments arrive with Stripe in Phase 3."
-              : `${payments.length} payment record(s).`}
-          </p>
+          {payments.length === 0 ? (
+            <p className="mt-3 text-sm text-ink-muted">
+              No payment attempts yet.
+            </p>
+          ) : (
+            <ul className="mt-3 space-y-1 text-sm">
+              {payments.map((p) => (
+                <li key={p.id}>
+                  {when(p.createdAt)} · {p.kind.toLowerCase()}{" "}
+                  {formatMoney(p.amountMinor, p.currency)} ·{" "}
+                  <strong>{p.status.toLowerCase()}</strong>
+                  {p.failureCode ? ` (${p.failureCode})` : ""}
+                  {p.stripePaymentIntentId
+                    ? ` · Stripe ${p.stripePaymentIntentId}`
+                    : ""}
+                </li>
+              ))}
+            </ul>
+          )}
+        </AdminSection>
+        <AdminSection id="emails" title="Messages">
+          {notifications.length === 0 ? (
+            <p>No messages.</p>
+          ) : (
+            <ul className="space-y-1 text-sm">
+              {notifications.map((n) => (
+                <li key={n.id}>
+                  {when(n.createdAt)} · {n.template.replaceAll("_", " ")} (to{" "}
+                  {n.recipientKind.toLowerCase()}) ·{" "}
+                  <strong>
+                    {n.status === "SUPPRESSED"
+                      ? "not sent (email delivery off)"
+                      : n.status.toLowerCase()}
+                  </strong>
+                  {n.lastErrorCode ? ` · ${n.lastErrorCode}` : ""}
+                </li>
+              ))}
+            </ul>
+          )}
         </AdminSection>
         <AdminSection id="history" title="History">
           <ul className="space-y-1 text-sm">
             {history.map((h) => (
               <li key={h.id}>
-                {h.createdAt.toISOString().slice(0, 16).replace("T", " ")} UTC ·{" "}
-                {h.action} · {h.actorType.toLowerCase()}
+                {when(h.createdAt)} · {h.action} · {h.actorType.toLowerCase()}
+                {h.actorId ? ` (${h.actorId})` : ""}
               </li>
             ))}
           </ul>

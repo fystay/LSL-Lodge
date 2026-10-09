@@ -1,11 +1,20 @@
 import { randomUUID } from "node:crypto";
 import { eq, sql } from "drizzle-orm";
-import { afterAll, beforeEach, describe, expect, it } from "vitest";
+import {
+  afterAll,
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from "vitest";
 import { parseIsoDate as d } from "@/lib/dates";
 import {
   auditLogs,
   externalBusyPeriods,
   externalCalendarSources,
+  notificationJobs,
   paymentPolicies,
   paymentScheduleItems,
   properties,
@@ -27,6 +36,9 @@ afterAll(async () => db.$client.end());
 
 // "Now" is fixed so dates and expiry are deterministic. Test data only.
 const NOW = new Date("2026-10-08T12:00:00Z");
+const MINUTE = 60_000;
+/** Default owner response window for requests. */
+const RESPONSE = 24 * 60 * MINUTE;
 
 async function setupProperty(
   overrides: Partial<typeof properties.$inferInsert> = {},
@@ -76,9 +88,10 @@ const input = (
 });
 
 beforeEach(async () => resetTables(db));
+afterEach(() => vi.unstubAllEnvs());
 
 describe("createHold", () => {
-  it("creates a priced hold with a payment schedule, expiry and audit entry", async () => {
+  it("creates a priced request that holds the dates until the owner's deadline", async () => {
     const property = await setupProperty();
     const result = await createHold(
       db,
@@ -87,8 +100,9 @@ describe("createHold", () => {
     expect(result.ok).toBe(true);
     if (!result.ok) return;
 
+    expect(result.kind).toBe("REQUEST");
     expect(result.quote.totalMinor).toBe(30_000);
-    expect(result.holdExpiresAt.toISOString()).toBe("2026-10-08T12:30:00.000Z");
+    expect(result.holdExpiresAt.toISOString()).toBe("2026-10-09T12:00:00.000Z");
     expect(result.publicRef).toMatch(/^LL-[A-HJ-NP-Z2-9]{6}$/);
 
     const schedule = await db
@@ -104,14 +118,58 @@ describe("createHold", () => {
       .select()
       .from(reservations)
       .where(eq(reservations.id, result.reservationId));
-    expect(row.status).toBe("PENDING_PAYMENT");
+    expect(row.status).toBe("REQUESTED");
+    expect(row.approvedAt).toBeNull();
     expect(row.accessTokenHash).not.toBe(result.accessToken);
 
     const audits = await db
       .select()
       .from(auditLogs)
       .where(eq(auditLogs.targetId, result.reservationId));
-    expect(audits.map((a) => a.action)).toEqual(["reservation.hold_created"]);
+    expect(audits.map((a) => a.action)).toEqual([
+      "reservation.request_submitted",
+    ]);
+    const jobs = await db
+      .select()
+      .from(notificationJobs)
+      .where(eq(notificationJobs.reservationId, result.reservationId));
+    expect(jobs.map((j) => [j.template, j.recipientKind]).sort()).toEqual([
+      ["owner_new_request", "OWNER"],
+      ["request_received", "GUEST"],
+    ]);
+  });
+
+  it("uses the owner's configured response window", async () => {
+    const property = await setupProperty({ requestResponseHours: 48 });
+    const result = await createHold(
+      db,
+      input(property.id, "2027-03-01", "2027-03-04"),
+    );
+    if (!result.ok) throw new Error("expected request");
+    expect(result.holdExpiresAt.toISOString()).toBe("2026-10-10T12:00:00.000Z");
+  });
+
+  it("refuses instant bookings unless the owner has approved that mode", async () => {
+    const property = await setupProperty({ bookingMode: "INSTANT" });
+    vi.stubEnv("INSTANT_BOOKING_APPROVED", "false");
+    expect(
+      await createHold(db, input(property.id, "2027-03-01", "2027-03-04")),
+    ).toEqual({ ok: false, reason: "BOOKINGS_DISABLED" });
+    expect(await db.select().from(reservations)).toHaveLength(0);
+
+    vi.stubEnv("INSTANT_BOOKING_APPROVED", "true");
+    const result = await createHold(
+      db,
+      input(property.id, "2027-03-01", "2027-03-04"),
+    );
+    if (!result.ok) throw new Error("expected hold");
+    expect(result.kind).toBe("INSTANT");
+    expect(result.holdExpiresAt.toISOString()).toBe("2026-10-08T12:30:00.000Z");
+    const [row] = await db
+      .select()
+      .from(reservations)
+      .where(eq(reservations.id, result.reservationId));
+    expect(row.status).toBe("PENDING_PAYMENT");
   });
 
   it("lets the guest find the booking only with the right token", async () => {
@@ -161,7 +219,7 @@ describe("createHold", () => {
     ).toBe(true);
   });
 
-  it("treats an expired hold as free and marks it EXPIRED", async () => {
+  it("treats an expired request as free and marks it EXPIRED", async () => {
     const property = await setupProperty();
     const first = await createHold(
       db,
@@ -169,7 +227,7 @@ describe("createHold", () => {
     );
     if (!first.ok) throw new Error("expected hold");
 
-    const later = new Date(NOW.getTime() + 31 * 60_000);
+    const later = new Date(NOW.getTime() + RESPONSE + MINUTE);
     const second = await createHold(
       db,
       input(property.id, "2027-03-01", "2027-03-04", { now: later }),
@@ -183,10 +241,10 @@ describe("createHold", () => {
     expect(old.status).toBe("EXPIRED");
   });
 
-  it("does not free a hold before it expires", async () => {
+  it("does not free a request before it expires", async () => {
     const property = await setupProperty();
     await createHold(db, input(property.id, "2027-03-01", "2027-03-04"));
-    const almost = new Date(NOW.getTime() + 29 * 60_000);
+    const almost = new Date(NOW.getTime() + RESPONSE - MINUTE);
     expect(
       await createHold(
         db,
@@ -318,7 +376,7 @@ describe("createHold", () => {
 });
 
 describe("expireLapsedHolds", () => {
-  it("expires only lapsed holds and audits each one", async () => {
+  it("expires only lapsed requests, audits and notifies once", async () => {
     const property = await setupProperty();
     const a = await createHold(
       db,
@@ -332,15 +390,30 @@ describe("expireLapsedHolds", () => {
     );
     if (!a.ok || !b.ok) throw new Error("expected holds");
 
-    const expired = await expireLapsedHolds(
-      db,
-      null,
-      new Date(NOW.getTime() + 35 * 60_000),
-    );
+    const at = new Date(NOW.getTime() + RESPONSE + 5 * MINUTE);
+    const expired = await expireLapsedHolds(db, null, at);
     expect(expired).toEqual([a.reservationId]);
-    expect(
-      await expireLapsedHolds(db, null, new Date(NOW.getTime() + 35 * 60_000)),
-    ).toEqual([]);
+    expect(await expireLapsedHolds(db, null, at)).toEqual([]);
+
+    const audits = await db
+      .select()
+      .from(auditLogs)
+      .where(eq(auditLogs.targetId, a.reservationId));
+    expect(audits.map((x) => x.action)).toContain(
+      "reservation.request_expired",
+    );
+    const jobs = await db
+      .select({ template: notificationJobs.template })
+      .from(notificationJobs)
+      .where(eq(notificationJobs.reservationId, a.reservationId));
+    expect(jobs.map((j) => j.template).sort()).toEqual(
+      [
+        "owner_new_request",
+        "owner_request_expired",
+        "request_expired",
+        "request_received",
+      ].sort(),
+    );
   });
 });
 

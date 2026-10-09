@@ -26,6 +26,22 @@ describe("reservation state machine", () => {
     }
   });
 
+  it("only reaches CONFIRMED from approval, an instant hold, a balance or review", () => {
+    const into = RESERVATION_STATUSES.filter((from) =>
+      canTransition(from, "CONFIRMED"),
+    ).sort();
+    expect(into).toEqual(
+      ["APPROVED", "PAYMENT_DUE", "PENDING_PAYMENT", "REQUIRES_REVIEW"].sort(),
+    );
+  });
+
+  it("never lets a request skip approval", () => {
+    expect(canTransition("REQUESTED", "CONFIRMED")).toBe(false);
+    expect(canTransition("REQUESTED", "PAYMENT_DUE")).toBe(false);
+    expect(canTransition("DECLINED", "APPROVED")).toBe(false);
+    expect(ALLOWED_TRANSITIONS.DECLINED).toEqual([]);
+  });
+
   it("routes a late payment on an expired hold to review only", () => {
     expect(ALLOWED_TRANSITIONS.EXPIRED).toEqual(["REQUIRES_REVIEW"]);
   });
@@ -34,8 +50,11 @@ describe("reservation state machine", () => {
     expect(ALLOWED_TRANSITIONS.REFUNDED).toEqual([]);
   });
 
-  it("keeps holds and review cases blocking the calendar", () => {
+  it("keeps requests, holds and review cases blocking the calendar", () => {
+    expect(BLOCKING_STATUSES).toContain("REQUESTED");
+    expect(BLOCKING_STATUSES).toContain("APPROVED");
     expect(BLOCKING_STATUSES).toContain("PENDING_PAYMENT");
+    expect(BLOCKING_STATUSES).not.toContain("DECLINED");
     expect(BLOCKING_STATUSES).toContain("REQUIRES_REVIEW");
     expect(BLOCKING_STATUSES).not.toContain("EXPIRED");
     expect(BLOCKING_STATUSES).not.toContain("CANCELLED");

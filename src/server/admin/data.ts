@@ -17,6 +17,7 @@ import {
   auditLogs,
   externalCalendarSources,
   feeRules,
+  notificationJobs,
   ownerBlocks,
   paymentPolicies,
   paymentScheduleItems,
@@ -25,6 +26,11 @@ import {
   rateRules,
   reservations,
 } from "@/server/db/schema";
+import {
+  conflictingBlocks,
+  loadBlocks,
+  type BlockSource,
+} from "@/server/booking/availability";
 import { BLOCKING_STATUSES } from "@/server/booking/reservation-state";
 import type {
   feeRuleSchema,
@@ -92,6 +98,56 @@ export async function upcomingStays(
     .limit(PAGE_SIZE);
 }
 
+/** Requests awaiting the owner's decision, soonest deadline first. */
+export async function pendingRequests(db: Executor, propertyId: string) {
+  return db
+    .select({
+      id: reservations.id,
+      publicRef: reservations.publicRef,
+      checkIn: reservations.checkIn,
+      checkOut: reservations.checkOut,
+      guests: reservations.guests,
+      guestName: reservations.guestName,
+      totalMinor: reservations.totalMinor,
+      currency: reservations.currency,
+      holdExpiresAt: reservations.holdExpiresAt,
+    })
+    .from(reservations)
+    .where(
+      and(
+        eq(reservations.propertyId, propertyId),
+        eq(reservations.status, "REQUESTED"),
+      ),
+    )
+    .orderBy(asc(reservations.holdExpiresAt))
+    .limit(PAGE_SIZE);
+}
+
+/** Bookings that need the owner: review cases (late payment, conflicts, mismatches). */
+export async function reviewQueue(db: Executor, propertyId: string) {
+  return db
+    .select({
+      id: reservations.id,
+      publicRef: reservations.publicRef,
+      status: reservations.status,
+      reviewReason: reservations.reviewReason,
+      checkIn: reservations.checkIn,
+      checkOut: reservations.checkOut,
+    })
+    .from(reservations)
+    .where(
+      and(
+        eq(reservations.propertyId, propertyId),
+        or(
+          eq(reservations.status, "REQUIRES_REVIEW"),
+          sql`${reservations.reviewReason} LIKE '%REFUND_REQUIRED'`,
+        ),
+      ),
+    )
+    .orderBy(asc(reservations.checkIn))
+    .limit(PAGE_SIZE);
+}
+
 export async function searchReservations(
   db: Executor,
   propertyId: string,
@@ -146,7 +202,7 @@ export async function reservationDetail(
       and(eq(reservations.id, id), eq(reservations.propertyId, propertyId)),
     );
   if (!reservation) return null;
-  const [schedule, paymentRows, history] = await Promise.all([
+  const [schedule, paymentRows, history, notifications] = await Promise.all([
     db
       .select()
       .from(paymentScheduleItems)
@@ -168,8 +224,58 @@ export async function reservationDetail(
       )
       .orderBy(asc(auditLogs.createdAt))
       .limit(PAGE_SIZE),
+    db
+      .select({
+        id: notificationJobs.id,
+        template: notificationJobs.template,
+        recipientKind: notificationJobs.recipientKind,
+        status: notificationJobs.status,
+        attempts: notificationJobs.attempts,
+        sentAt: notificationJobs.sentAt,
+        lastErrorCode: notificationJobs.lastErrorCode,
+        createdAt: notificationJobs.createdAt,
+      })
+      .from(notificationJobs)
+      .where(eq(notificationJobs.reservationId, id))
+      .orderBy(asc(notificationJobs.createdAt))
+      .limit(PAGE_SIZE),
   ]);
-  return { reservation, schedule, payments: paymentRows, history };
+  return {
+    reservation,
+    schedule,
+    payments: paymentRows,
+    history,
+    notifications,
+  };
+}
+
+/**
+ * Other calendar entries that now overlap a reservation, by source. Shown to
+ * the owner before deciding; external sources are advisory until reconciled.
+ */
+export async function reservationConflicts(
+  db: Executor,
+  reservation: {
+    id: string;
+    propertyId: string;
+    checkIn: string;
+    checkOut: string;
+  },
+  turnoverNights: number,
+  now: Date,
+): Promise<BlockSource[]> {
+  const stay = {
+    start: reservation.checkIn as IsoDate,
+    end: reservation.checkOut as IsoDate,
+  };
+  const blocks = (
+    await loadBlocks(db, reservation.propertyId, stay, turnoverNights, now)
+  ).filter((b) => b.id !== reservation.id);
+  return [
+    ...new Set(
+      conflictingBlocks(blocks, stay, turnoverNights).map((b) => b.source),
+    ),
+  ];
 }
 
 export async function recentAudit(db: Executor, limit = 20) {
@@ -449,6 +555,8 @@ export async function updatePropertySettings(
         checkInTime: input.checkInTime,
         checkOutTime: input.checkOutTime,
         bookingsEnabled: input.bookingsEnabled,
+        requestResponseHours: input.requestResponseHours,
+        paymentWindowHours: input.paymentWindowHours,
       })
       .where(eq(properties.id, propertyId));
     await audit(

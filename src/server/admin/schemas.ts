@@ -214,6 +214,15 @@ export const propertySettingsSchema = z.object({
     .string()
     .optional()
     .transform((v) => v === "on"),
+  requestResponseHours: optionalInt(1, 168, "Response window (hours)")
+    .refine(
+      (v) => v !== null,
+      "Enter how long you have to respond to a request.",
+    )
+    .transform((v) => v!),
+  paymentWindowHours: optionalInt(1, 168, "Payment window (hours)")
+    .refine((v) => v !== null, "Enter how long an approved guest has to pay.")
+    .transform((v) => v!),
 });
 
 /** First error message per field, for form display. */

@@ -8,6 +8,7 @@ import {
   primaryButton,
 } from "@/components/admin-ui";
 import { adminContext } from "@/server/admin/context";
+import { instantBookingApproved } from "@/server/booking/mode";
 import { updateSettingsAction } from "../../actions";
 
 export const metadata = { title: "Settings" };
@@ -46,6 +47,33 @@ async function Settings({
         saved={typeof saved === "string" ? saved : undefined}
         error={typeof error === "string" ? error : undefined}
       />
+      <AdminSection id="booking-mode" title="How guests book">
+        <p>
+          Current mode:{" "}
+          <strong>
+            {p.bookingMode === "REQUEST"
+              ? "Booking requests with your approval"
+              : "Instant booking"}
+          </strong>
+          .
+        </p>
+        <ol className="mt-2 list-decimal space-y-1 pl-5">
+          <li>
+            A guest sends a request. Nothing is charged; the dates are held.
+          </li>
+          <li>You approve or decline within your response window.</li>
+          <li>
+            An approved guest pays the full amount within the payment window.
+          </li>
+          <li>The booking is confirmed only when payment is verified.</li>
+        </ol>
+        <p className="mt-3 text-sm text-ink-muted">
+          Instant booking (pay straight away, no approval) is built but{" "}
+          {instantBookingApproved()
+            ? "has been approved for this site."
+            : "switched off. It needs your sign-off of an instant-booking policy before it can be enabled."}
+        </p>
+      </AdminSection>
       <AdminSection id="stay-rules" title="Stay rules">
         <form
           action={updateSettingsAction}
@@ -119,6 +147,36 @@ async function Settings({
                   ? p.checkOutTime
                   : ""
               }
+              className={inputClass}
+            />
+          </Field>
+          <Field
+            label="Response window (hours)"
+            name="requestResponseHours"
+            hint="How long you have to approve or decline. Default 24; confirm your own."
+          >
+            <input
+              id="requestResponseHours"
+              name="requestResponseHours"
+              inputMode="numeric"
+              required
+              defaultValue={p.requestResponseHours}
+              aria-describedby="requestResponseHours-hint"
+              className={inputClass}
+            />
+          </Field>
+          <Field
+            label="Payment window (hours)"
+            name="paymentWindowHours"
+            hint="How long an approved guest has to pay. Default 24; confirm your own."
+          >
+            <input
+              id="paymentWindowHours"
+              name="paymentWindowHours"
+              inputMode="numeric"
+              required
+              defaultValue={p.paymentWindowHours}
+              aria-describedby="paymentWindowHours-hint"
               className={inputClass}
             />
           </Field>

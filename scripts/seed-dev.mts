@@ -70,12 +70,11 @@ try {
         amountMinor: 6_000,
         taxTreatment: "UNCONFIRMED",
       });
+      // Full payment after approval: the owner's chosen model. Amounts above
+      // are still placeholders.
       await tx.insert(schema.paymentPolicies).values({
         propertyId: property.id,
-        mode: "DEPOSIT",
-        depositBasisPoints: 3_000,
-        balanceDueDaysBeforeCheckIn: 42,
-        fullPaymentWithinDays: 42,
+        mode: "FULL",
       });
     }
   });

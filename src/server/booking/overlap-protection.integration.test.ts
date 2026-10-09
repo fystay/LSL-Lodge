@@ -150,6 +150,68 @@ describe("reservation status rules in the database", () => {
     expect(pgErrorCode(error)).toBe(CHECK_VIOLATION);
   });
 
+  it("only lets website reservations start as a request or an instant hold", async () => {
+    const property = await createProperty(db);
+    let day = 1;
+    for (const status of RESERVATION_STATUSES) {
+      const start = `2031-01-${String(day).padStart(2, "0")}`;
+      const end = `2031-01-${String(day + 1).padStart(2, "0")}`;
+      day += 2;
+      const outcome = await db
+        .insert(reservations)
+        .values(
+          holdValues(property.id, start, end, {
+            status,
+            approvedAt: new Date(),
+          }),
+        )
+        .then(() => "allowed")
+        .catch((e: unknown) => {
+          expect(pgErrorCode(e)).toBe(CHECK_VIOLATION);
+          return "rejected";
+        });
+      expect({ status, outcome }).toEqual({
+        status,
+        outcome:
+          status === "REQUESTED" || status === "PENDING_PAYMENT"
+            ? "allowed"
+            : "rejected",
+      });
+    }
+  });
+
+  it("requires an approval time on an approved request", async () => {
+    const property = await createProperty(db);
+    const [row] = await db
+      .insert(reservations)
+      .values(
+        holdValues(property.id, "2026-09-01", "2026-09-03", {
+          status: "REQUESTED",
+        }),
+      )
+      .returning();
+    const error = await db
+      .update(reservations)
+      .set({ status: "APPROVED" })
+      .where(eq(reservations.id, row.id))
+      .catch((e: unknown) => e);
+    expect(pgErrorCode(error)).toBe(CHECK_VIOLATION);
+  });
+
+  it("blocks overlapping requests just like bookings", async () => {
+    const property = await createProperty(db);
+    await db.insert(reservations).values(
+      holdValues(property.id, "2026-09-01", "2026-09-05", {
+        status: "REQUESTED",
+      }),
+    );
+    const error = await db
+      .insert(reservations)
+      .values(holdValues(property.id, "2026-09-04", "2026-09-06"))
+      .catch((e: unknown) => e);
+    expect(pgErrorCode(error)).toBe(EXCLUSION_VIOLATION);
+  });
+
   it("requires an expiry on every hold", async () => {
     const property = await createProperty(db);
     const error = await db
@@ -194,7 +256,11 @@ describe("reservation status rules in the database", () => {
 
         const [row] = await db
           .insert(reservations)
-          .values(holdValues(property.id, start, end))
+          // approvedAt satisfies the APPROVED check constraint, so only the
+          // transition trigger decides.
+          .values(
+            holdValues(property.id, start, end, { approvedAt: new Date() }),
+          )
           .returning();
         await forceStatus(row.id, from);
 

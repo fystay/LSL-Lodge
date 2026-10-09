@@ -11,7 +11,9 @@ import { formatMoney } from "@/lib/money";
 import { adminContext } from "@/server/admin/context";
 import {
   calendarSources,
+  pendingRequests,
   recentAudit,
+  reviewQueue,
   upcomingStays,
 } from "@/server/admin/data";
 
@@ -41,11 +43,21 @@ async function Overview({
         <NotReady reason={ctx.reason} />
       </div>
     );
-  const [stays, sources, audit] = await Promise.all([
+  const [requests, review, stays, sources, audit] = await Promise.all([
+    pendingRequests(ctx.db, ctx.property.id),
+    reviewQueue(ctx.db, ctx.property.id),
     upcomingStays(ctx.db, ctx.property.id, ctx.today),
     calendarSources(ctx.db, ctx.property.id),
     recentAudit(ctx.db, 15),
   ]);
+  const deadline = (d: Date | null) =>
+    d
+      ? new Intl.DateTimeFormat("en-GB", {
+          dateStyle: "medium",
+          timeStyle: "short",
+          timeZone: ctx.property.timeZone,
+        }).format(d)
+      : "—";
 
   return (
     <div className="mt-6 space-y-6">
@@ -58,7 +70,65 @@ async function Overview({
         for this property.
       </p>
 
-      <AdminSection id="upcoming" title="Upcoming stays and holds">
+      <AdminSection id="requests" title="Requests awaiting your decision">
+        {requests.length === 0 ? (
+          <p>No requests waiting.</p>
+        ) : (
+          <ul className="divide-y divide-sage-300/70">
+            {requests.map((q) => (
+              <li
+                key={q.id}
+                className="flex flex-wrap items-baseline justify-between gap-2 py-3"
+              >
+                <Link
+                  href={`/admin/bookings/${q.id}`}
+                  className="font-semibold text-pine-800 underline underline-offset-4"
+                >
+                  {q.publicRef}
+                </Link>
+                <span>
+                  {formatStayDate(q.checkIn as IsoDate)} –{" "}
+                  {formatStayDate(q.checkOut as IsoDate)} · {q.guests} guests ·{" "}
+                  {q.guestName}
+                </span>
+                <span className="tabular-nums">
+                  {formatMoney(q.totalMinor, q.currency)}
+                </span>
+                <span>
+                  Respond by <strong>{deadline(q.holdExpiresAt)}</strong>
+                </span>
+              </li>
+            ))}
+          </ul>
+        )}
+      </AdminSection>
+
+      {review.length > 0 && (
+        <AdminSection id="review" title="Needs your attention">
+          <ul className="divide-y divide-sage-300/70">
+            {review.map((q) => (
+              <li key={q.id} className="flex flex-wrap gap-3 py-3">
+                <Link
+                  href={`/admin/bookings/${q.id}`}
+                  className="font-semibold text-pine-800 underline underline-offset-4"
+                >
+                  {q.publicRef}
+                </Link>
+                <span>
+                  {formatStayDate(q.checkIn as IsoDate)} –{" "}
+                  {formatStayDate(q.checkOut as IsoDate)}
+                </span>
+                <span>{statusLabel(q.status)}</span>
+                <span className="font-semibold text-danger">
+                  {(q.reviewReason ?? "").replaceAll("_", " ").toLowerCase()}
+                </span>
+              </li>
+            ))}
+          </ul>
+        </AdminSection>
+      )}
+
+      <AdminSection id="upcoming" title="Upcoming stays, requests and holds">
         {stays.length === 0 ? (
           <p>No upcoming stays.</p>
         ) : (

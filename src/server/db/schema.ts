@@ -60,6 +60,9 @@ const stayColumns = (startColumn: string, endColumn: string) => ({
 // --- Enums -------------------------------------------------------------------
 
 export const reservationStatus = pgEnum("reservation_status", [
+  "REQUESTED",
+  "APPROVED",
+  "DECLINED",
   "PENDING_PAYMENT",
   "CONFIRMED",
   "PAYMENT_DUE",
@@ -69,6 +72,14 @@ export const reservationStatus = pgEnum("reservation_status", [
   "REFUNDED",
   "REQUIRES_REVIEW",
 ]);
+
+/**
+ * REQUEST: the guest asks, the owner approves, then the guest pays (the
+ * initial, owner-chosen mode). INSTANT: the guest pays straight away; built
+ * but refused at runtime until the owner approves it (see
+ * src/server/booking/mode.ts).
+ */
+export const bookingMode = pgEnum("booking_mode", ["REQUEST", "INSTANT"]);
 
 export const reservationSource = pgEnum("reservation_source", [
   "DIRECT",
@@ -163,6 +174,8 @@ export const notificationStatus = pgEnum("notification_status", [
   "SENT",
   "FAILED",
   "CANCELLED",
+  /** Rendered but deliberately not delivered (email delivery switched off). */
+  "SUPPRESSED",
 ]);
 
 export const recipientKind = pgEnum("recipient_kind", ["GUEST", "OWNER"]);
@@ -196,9 +209,24 @@ export const properties = pgTable(
     /** Reference to published, owner-approved content (e.g. a content slug). */
     contentRef: text("content_ref"),
     bookingsEnabled: boolean("bookings_enabled").notNull().default(false),
+    bookingMode: bookingMode("booking_mode").notNull().default("REQUEST"),
+    /** How long the owner has to approve or decline a request. */
+    requestResponseHours: smallint("request_response_hours")
+      .notNull()
+      .default(24),
+    /** How long an approved guest has to pay before the dates are released. */
+    paymentWindowHours: smallint("payment_window_hours").notNull().default(24),
     ...timestamps,
   },
   (t) => [
+    check(
+      "properties_request_response_hours_range",
+      sql`${t.requestResponseHours} BETWEEN 1 AND 168`,
+    ),
+    check(
+      "properties_payment_window_hours_range",
+      sql`${t.paymentWindowHours} BETWEEN 1 AND 168`,
+    ),
     check("properties_max_guests_positive", sql`${t.maxGuests} > 0`),
     check("properties_min_nights_positive", sql`${t.defaultMinNights} > 0`),
     check("properties_turnover_non_negative", sql`${t.turnoverNights} >= 0`),
@@ -310,9 +338,11 @@ export const paymentPolicies = pgTable(
 // --- Reservations ------------------------------------------------------------
 
 /**
- * A reservation in PENDING_PAYMENT with `holdExpiresAt` *is* the short-lived
- * hold (the "ReservationHold or equivalent"); a single table means a single
- * exclusion constraint covers holds and confirmed stays alike.
+ * Requests, holds and bookings share one table, so a single exclusion
+ * constraint covers them all. A reservation in REQUESTED, APPROVED or
+ * PENDING_PAYMENT holds its dates until `holdExpiresAt` (the "ReservationHold
+ * or equivalent"): the owner's response deadline, the guest's payment
+ * deadline, or the instant-booking hold respectively.
  */
 export const reservations = pgTable(
   "reservations",
@@ -335,6 +365,15 @@ export const reservations = pgTable(
     /** Immutable itemised quote (rule versions, line items, schedule). */
     quoteSnapshot: jsonb("quote_snapshot").notNull(),
     holdExpiresAt: timestamp("hold_expires_at", { withTimezone: true }),
+    approvedAt: timestamp("approved_at", { withTimezone: true }),
+    /** Admin email of the approver. */
+    approvedBy: text("approved_by"),
+    declinedAt: timestamp("declined_at", { withTimezone: true }),
+    declinedBy: text("declined_by"),
+    /** Owner-only note; never shown to the guest. */
+    ownerNote: text("owner_note"),
+    /** Machine-readable reason a reservation needs the owner (e.g. PAYMENT_AFTER_EXPIRY). */
+    reviewReason: text("review_reason"),
     idempotencyKey: text("idempotency_key").notNull().unique(),
     /** SHA-256 of the guest's booking-access token; the token is never stored. */
     accessTokenHash: text("access_token_hash").notNull(),
@@ -352,13 +391,17 @@ export const reservations = pgTable(
     check("reservations_total_non_negative", sql`${t.totalMinor} >= 0`),
     check(
       "reservations_hold_has_expiry",
-      sql`${t.status} <> 'PENDING_PAYMENT' OR ${t.holdExpiresAt} IS NOT NULL`,
+      sql`${t.status} NOT IN ('REQUESTED', 'APPROVED', 'PENDING_PAYMENT') OR ${t.holdExpiresAt} IS NOT NULL`,
+    ),
+    check(
+      "reservations_approved_has_approver",
+      sql`${t.status} <> 'APPROVED' OR ${t.approvedAt} IS NOT NULL`,
     ),
     index("reservations_property_stay_idx").using("gist", t.propertyId, t.stay),
     index("reservations_status_idx").on(t.status),
     index("reservations_hold_expiry_idx")
       .on(t.holdExpiresAt)
-      .where(sql`${t.status} = 'PENDING_PAYMENT'`),
+      .where(sql`${t.status} IN ('REQUESTED', 'APPROVED', 'PENDING_PAYMENT')`),
   ],
 );
 
@@ -413,6 +456,8 @@ export const payments = pgTable(
     stripeCheckoutSessionId: text("stripe_checkout_session_id").unique(),
     stripePaymentIntentId: text("stripe_payment_intent_id").unique(),
     stripeRefundId: text("stripe_refund_id").unique(),
+    /** When the Stripe Checkout Session stops accepting payment. */
+    checkoutExpiresAt: timestamp("checkout_expires_at", { withTimezone: true }),
     /** Provider failure code only; never card details or raw messages. */
     failureCode: text("failure_code"),
     succeededAt: timestamp("succeeded_at", { withTimezone: true }),

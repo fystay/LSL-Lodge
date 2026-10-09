@@ -1,7 +1,12 @@
 import { randomUUID } from "node:crypto";
 import { sql } from "drizzle-orm";
 import { createDatabase, type Database } from "@/server/db/client";
-import { properties, reservations } from "@/server/db/schema";
+import {
+  paymentPolicies,
+  properties,
+  rateRules,
+  reservations,
+} from "@/server/db/schema";
 
 export function testDatabase(max = 10): Database {
   const url = process.env.TEST_DATABASE_URL;
@@ -67,4 +72,39 @@ export function pgErrorCode(error: unknown): string | undefined {
     current = "cause" in current ? current.cause : undefined;
   }
   return undefined;
+}
+
+/**
+ * A property that takes bookings: £100 a night through 2027, 2-night minimum.
+ * Payment plan defaults to full payment (the owner's chosen model). Test data only.
+ */
+export async function createBookableProperty(
+  db: Database,
+  overrides: Partial<typeof properties.$inferInsert> = {},
+  policy: Partial<typeof paymentPolicies.$inferInsert> = { mode: "FULL" },
+) {
+  const [property] = await db
+    .insert(properties)
+    .values({
+      slug: `lodge-${randomUUID()}`,
+      name: "Test lodge",
+      maxGuests: 6,
+      defaultMinNights: 2,
+      bookingsEnabled: true,
+      ...overrides,
+    })
+    .returning();
+  await db.insert(rateRules).values({
+    propertyId: property.id,
+    name: "Test rate",
+    startsOn: "2026-01-01",
+    endsOn: "2028-01-01",
+    nightlyMinor: 10_000,
+  });
+  await db.insert(paymentPolicies).values({
+    propertyId: property.id,
+    mode: "FULL",
+    ...policy,
+  });
+  return property;
 }

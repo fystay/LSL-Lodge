@@ -1,15 +1,20 @@
 import "server-only";
 import { createHash, randomBytes, randomInt } from "node:crypto";
-import { and, eq, lte, sql } from "drizzle-orm";
+import { and, eq, inArray, lte, sql } from "drizzle-orm";
 import { todayInTimeZone, type IsoDate } from "@/lib/dates";
 import type { Database, Executor } from "@/server/db/client";
 import {
   auditLogs,
   ownerBlocks,
   paymentScheduleItems,
+  payments,
   properties,
   reservations,
 } from "@/server/db/schema";
+import {
+  enqueueForReservation,
+  type NotificationTemplate,
+} from "@/server/notifications/outbox";
 import {
   calculateQuote,
   type Quote,
@@ -17,8 +22,15 @@ import {
 } from "@/server/pricing/quote";
 import { loadPricingInputs } from "@/server/pricing/load";
 import { conflictingBlocks, loadBlocks, type Block } from "./availability";
+import {
+  guestLinkSecret,
+  looksLikeGuestLink,
+  verifyGuestLink,
+} from "./guest-link";
+import { effectiveBookingMode } from "./mode";
+import { EXPIRING_STATUSES } from "./reservation-state";
 
-/** How long a guest has to complete payment before the hold lapses. */
+/** Instant mode only: how long a guest has to complete payment before the hold lapses. */
 export const HOLD_MINUTES = 30;
 
 export interface HoldInput {
@@ -35,6 +47,8 @@ export interface HoldInput {
 export type HoldResult =
   | {
       ok: true;
+      /** REQUEST: awaiting the owner. INSTANT: awaiting payment. */
+      kind: "REQUEST" | "INSTANT";
       reservationId: string;
       publicRef: string;
       /** Bearer secret for the guest's booking page. Only its hash is stored. */
@@ -68,14 +82,18 @@ export function generatePublicRef(): string {
 }
 
 /**
- * Places a short-lived hold on the dates, atomically.
+ * Holds the dates for a guest, atomically. In REQUEST mode (the default) this
+ * is a booking request that holds the dates until the owner's response
+ * deadline; nothing is charged. In INSTANT mode (disabled unless approved) it
+ * is a short payment hold.
  *
  * Inside one transaction: lock the property row (serialising all booking
  * writes for the property), replay an earlier attempt with the same
- * idempotency key, expire lapsed holds, re-check every source of
+ * idempotency key, expire lapsed requests and holds, re-check every source of
  * unavailability including the turnover buffer, price the stay from the
- * current rules, then insert the reservation, its payment schedule and an
- * audit entry. The exclusion constraint backstops the overlap check.
+ * current rules, then insert the reservation, its payment schedule, an audit
+ * entry and the notification jobs. The exclusion constraint backstops the
+ * overlap check.
  */
 export async function createHold(
   db: Database,
@@ -92,6 +110,8 @@ export async function createHold(
       if (!property) return { ok: false, reason: "NOT_CONFIGURED" } as const;
       if (!property.bookingsEnabled)
         return { ok: false, reason: "BOOKINGS_DISABLED" } as const;
+      const mode = effectiveBookingMode(property.bookingMode);
+      if (!mode) return { ok: false, reason: "BOOKINGS_DISABLED" } as const;
 
       const replay = await replayHold(tx, input);
       if (replay) return replay;
@@ -142,14 +162,16 @@ export async function createHold(
         return { ok: false, reason: "QUOTE", error: priced.error } as const;
 
       const accessToken = randomBytes(32).toString("base64url");
-      const holdExpiresAt = new Date(now.getTime() + HOLD_MINUTES * 60_000);
+      const holdMinutes =
+        mode === "REQUEST" ? property.requestResponseHours * 60 : HOLD_MINUTES;
+      const holdExpiresAt = new Date(now.getTime() + holdMinutes * 60_000);
       const [row] = await tx
         .insert(reservations)
         .values({
           publicRef: generatePublicRef(),
           propertyId: property.id,
           source: "DIRECT",
-          status: "PENDING_PAYMENT",
+          status: mode === "REQUEST" ? "REQUESTED" : "PENDING_PAYMENT",
           checkIn: input.checkIn,
           checkOut: input.checkOut,
           guests: input.guests,
@@ -177,18 +199,27 @@ export async function createHold(
 
       await tx.insert(auditLogs).values({
         actorType: "GUEST",
-        action: "reservation.hold_created",
+        action:
+          mode === "REQUEST"
+            ? "reservation.request_submitted"
+            : "reservation.hold_created",
         targetType: "reservation",
         targetId: row.id,
         metadata: {
           nights: priced.quote.nights,
           totalMinor: priced.quote.totalMinor,
-          holdMinutes: HOLD_MINUTES,
+          holdMinutes,
         },
       });
+      if (mode === "REQUEST")
+        await enqueueForReservation(tx, row.id, [
+          "request_received",
+          "owner_new_request",
+        ]);
 
       return {
         ok: true,
+        kind: mode,
         reservationId: row.id,
         publicRef: row.publicRef,
         accessToken,
@@ -236,6 +267,7 @@ async function replayHold(
     .where(eq(reservations.id, existing.id));
   return {
     ok: true,
+    kind: existing.status === "PENDING_PAYMENT" ? "INSTANT" : "REQUEST",
     reservationId: existing.id,
     publicRef: existing.publicRef,
     accessToken,
@@ -245,42 +277,88 @@ async function replayHold(
   };
 }
 
-/** Marks lapsed holds EXPIRED. Safe to run any time; used by the sweeper job too. */
+const EXPIRY_NOTICES: Partial<
+  Record<(typeof EXPIRING_STATUSES)[number], NotificationTemplate[]>
+> = {
+  REQUESTED: ["request_expired", "owner_request_expired"],
+  APPROVED: ["payment_window_expired"],
+};
+
+/**
+ * Marks lapsed requests, approvals and holds EXPIRED, freeing their dates.
+ * Safe to run any time; used inside every booking transaction and by the
+ * sweeper job. An approved request whose payment is still being processed by
+ * Stripe is left alone: it moves on when the payment settles or fails.
+ */
 export async function expireLapsedHolds(
   db: Executor,
   propertyId: string | null,
   now: Date,
 ): Promise<string[]> {
-  const expired = await db
-    .update(reservations)
-    .set({ status: "EXPIRED" })
-    .where(
-      and(
-        eq(reservations.status, "PENDING_PAYMENT"),
-        lte(reservations.holdExpiresAt, now),
-        propertyId ? eq(reservations.propertyId, propertyId) : sql`true`,
-      ),
-    )
-    .returning({ id: reservations.id });
-  if (expired.length > 0) {
-    await db.insert(auditLogs).values(
-      expired.map((r) => ({
-        actorType: "SYSTEM" as const,
-        action: "reservation.hold_expired",
+  return db.transaction(async (tx) => {
+    const lapsed = await tx
+      .select({ id: reservations.id, status: reservations.status })
+      .from(reservations)
+      .where(
+        and(
+          inArray(reservations.status, [...EXPIRING_STATUSES]),
+          lte(reservations.holdExpiresAt, now),
+          propertyId ? eq(reservations.propertyId, propertyId) : sql`true`,
+          sql`NOT EXISTS (SELECT 1 FROM ${payments} WHERE ${payments.reservationId} = ${reservations.id} AND ${payments.status} = 'PROCESSING')`,
+        ),
+      )
+      .for("update");
+    const expired: string[] = [];
+    for (const row of lapsed) {
+      const [updated] = await tx
+        .update(reservations)
+        .set({ status: "EXPIRED" })
+        .where(
+          and(eq(reservations.id, row.id), eq(reservations.status, row.status)),
+        )
+        .returning({ id: reservations.id });
+      if (!updated) continue;
+      expired.push(row.id);
+      await tx.insert(auditLogs).values({
+        actorType: "SYSTEM",
+        action:
+          row.status === "REQUESTED"
+            ? "reservation.request_expired"
+            : row.status === "APPROVED"
+              ? "reservation.payment_window_expired"
+              : "reservation.hold_expired",
         targetType: "reservation",
-        targetId: r.id,
-      })),
-    );
-  }
-  return expired.map((r) => r.id);
+        targetId: row.id,
+      });
+      const notices =
+        EXPIRY_NOTICES[row.status as keyof typeof EXPIRY_NOTICES] ?? [];
+      await enqueueForReservation(tx, row.id, notices);
+    }
+    return expired;
+  });
 }
 
-/** Looks up a guest's reservation by reference plus bearer token (matched by its SHA-256 hash). */
+/**
+ * Looks up a guest's reservation by reference plus a bearer credential: the
+ * random access token from the booking form (matched by its SHA-256 hash), or
+ * a signed link from one of our emails.
+ */
 export async function findReservationForGuest(
   db: Executor,
   publicRef: string,
   token: string,
 ) {
+  if (looksLikeGuestLink(token)) {
+    const secret = guestLinkSecret();
+    if (!secret) return null;
+    const [row] = await db
+      .select()
+      .from(reservations)
+      .where(eq(reservations.publicRef, publicRef));
+    return row && verifyGuestLink(secret, token, publicRef, row.id)
+      ? row
+      : null;
+  }
   const [row] = await db
     .select()
     .from(reservations)

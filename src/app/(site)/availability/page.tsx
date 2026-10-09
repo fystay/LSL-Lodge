@@ -201,6 +201,7 @@ async function StayResult({
   now: Date;
 }) {
   const { available, quote } = await checkStay(ctx, search, today, now);
+  const request = ctx.property.bookingMode === "REQUEST";
   if (!available) {
     return (
       <div className="mt-5 max-w-2xl space-y-2">
@@ -235,13 +236,20 @@ async function StayResult({
       <div>
         <p className="font-semibold text-success">Available for your dates</p>
         <div className="mt-4">
-          <QuoteSummary quote={quote.quote} today={today} />
+          <QuoteSummary
+            quote={quote.quote}
+            today={today}
+            dueLabels={
+              request ? { 1: "due once the owner approves" } : undefined
+            }
+          />
         </div>
       </div>
       <div className="rounded-soft bg-ivory p-5">
         <p className="text-sm text-ink-muted">
-          Nothing is reserved yet. The next step holds these dates for you for
-          30 minutes while you complete your booking.
+          {request
+            ? "Nothing is reserved or charged yet. Next, you send a booking request; the owner approves it before you pay."
+            : "Nothing is reserved yet. The next step holds these dates for you for 30 minutes while you complete your booking."}
         </p>
         <Link
           href={`/book?${query}`}

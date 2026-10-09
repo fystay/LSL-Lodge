@@ -15,6 +15,13 @@
       "when": 1791455275070,
       "tag": "0001_overlap_protection",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1791575378071,
+      "tag": "0002_host_approval_workflow",
+      "breakpoints": true
     }
   ]
 }

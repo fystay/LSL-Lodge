@@ -12,7 +12,8 @@ test.skip(
 );
 test.describe.configure({ mode: "serial" });
 
-// Placeholder seed: £150 weeknights, £180 Fri/Sat, £60 cleaning, 30% deposit.
+// Placeholder seed: £150 weeknights, £180 Fri/Sat, £60 cleaning, full payment
+// after the owner approves.
 // Mon → Thu: 3 weeknights = £450 + £60 = £510. Each browser project books a
 // different week, because the projects share one database.
 const weeks = {
@@ -46,11 +47,15 @@ test("guest sees an itemised price and payment schedule before committing", asyn
   await expect(breakdown).toContainText("£450");
   await expect(breakdown).toContainText("Cleaning (placeholder)");
   await expect(breakdown).toContainText("£510");
-  await expect(page.getByText(/Deposit\s+due now/)).toBeVisible();
-  await expect(page.getByText(/Balance\s+due by/)).toBeVisible();
+  await expect(
+    page.getByText(/Full payment\s+due once the owner approves/),
+  ).toBeVisible();
+  await expect(
+    page.getByText(/owner approves it before you pay/),
+  ).toBeVisible();
 });
 
-test("guest places a hold; the dates then show as unavailable to others", async ({
+test("guest sends a request; the dates then show as unavailable to others", async ({
   page,
   browser,
 }, info) => {
@@ -59,8 +64,9 @@ test("guest places a hold; the dates then show as unavailable to others", async 
   await page.getByRole("link", { name: "Continue to book" }).click();
   await expect(page).toHaveURL(/\/book\?/);
 
+  await expect(page.getByText("Nothing is charged.")).toBeVisible();
   // Server-side validation first.
-  await page.getByRole("button", { name: "Hold these dates" }).click();
+  await page.getByRole("button", { name: "Send booking request" }).click();
   await expect(
     page.getByRole("alert").filter({ hasText: "Please check the following" }),
   ).toBeVisible();
@@ -68,13 +74,20 @@ test("guest places a hold; the dates then show as unavailable to others", async 
   await page.getByLabel("Lead guest name").fill("Test Guest");
   await page.getByLabel("Email address").fill("guest@example.test");
   await page.getByLabel(/I have read the/).check();
-  await page.getByRole("button", { name: "Hold these dates" }).click();
+  await page.getByRole("button", { name: "Send booking request" }).click();
 
   await expect(page).toHaveURL(/\/book\/LL-[A-Z0-9]{6}$/);
   await expect(
     page.getByRole("heading", { name: /Booking reference LL-/ }),
   ).toBeVisible();
-  await expect(page.getByText("Payment isn’t switched on yet.")).toBeVisible();
+  // A request is never presented as a confirmed booking.
+  await expect(page.getByRole("status")).toContainText(
+    "Request sent: awaiting the owner’s approval",
+  );
+  await expect(page.getByRole("status")).toContainText(
+    "Nothing has been charged",
+  );
+  await expect(page.getByRole("status")).not.toContainText("Confirmed");
   const holdUrl = page.url();
 
   // A different visitor (no cookie) sees the not-found page, not the booking.

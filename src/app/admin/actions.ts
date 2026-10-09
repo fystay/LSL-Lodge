@@ -3,6 +3,7 @@
 import type { Route } from "next";
 import { redirect } from "next/navigation";
 import { createOwnerBlock, removeOwnerBlock } from "@/server/booking/holds";
+import { approveRequest, declineRequest } from "@/server/booking/requests";
 import { signInLocal, signOut } from "@/server/admin/auth";
 import { adminContext } from "@/server/admin/context";
 import {
@@ -99,6 +100,65 @@ export async function removeOwnerBlockAction(form: FormData) {
     removed
       ? { saved: "Block removed; those dates are bookable again." }
       : { error: "That block was already removed." },
+  );
+}
+
+// --- Booking requests -----------------------------------------------------------------
+
+const CONFLICT_SOURCE: Record<string, string> = {
+  OWNER_BLOCK: "one of your blocked periods",
+  AIRBNB_ICAL: "an Airbnb booking",
+  GOOGLE: "a Google Calendar event",
+  OTHER_ICAL: "an imported calendar",
+  CHANNEL_MANAGER: "a channel-manager booking",
+  DIRECT_BOOKING: "another booking",
+  HOLD: "another request",
+};
+
+export async function approveRequestAction(form: FormData) {
+  const ctx = await ready();
+  const id = uuid(form.get("id"));
+  if (!id) back("/admin/bookings", { error: "Unknown booking." });
+  const path = `/admin/bookings/${id}`;
+  const result = await approveRequest(ctx.db, {
+    propertyId: ctx.property.id,
+    reservationId: id,
+    actor: ctx.admin.email,
+    ownerNote: String(form.get("ownerNote") ?? ""),
+  });
+  if (result.ok)
+    back(path, {
+      saved:
+        "Approved. The guest has been asked to pay; the booking confirms only when payment is verified.",
+    });
+  back(path, {
+    error:
+      result.reason === "CONFLICT"
+        ? `Can’t approve: the dates now overlap ${result.sources.map((s) => CONFLICT_SOURCE[s] ?? s).join(" and ")}. Decline the request or resolve the clash first.`
+        : result.reason === "EXPIRED"
+          ? "This request lapsed before it was approved; its dates have been released."
+          : "This request has already been decided.",
+  });
+}
+
+export async function declineRequestAction(form: FormData) {
+  const ctx = await ready();
+  const id = uuid(form.get("id"));
+  if (!id) back("/admin/bookings", { error: "Unknown booking." });
+  const path = `/admin/bookings/${id}`;
+  if (form.get("confirm") !== "yes")
+    back(path, { error: "Tick the box to confirm you want to decline." });
+  const result = await declineRequest(ctx.db, {
+    propertyId: ctx.property.id,
+    reservationId: id,
+    actor: ctx.admin.email,
+    ownerNote: String(form.get("ownerNote") ?? ""),
+  });
+  back(
+    path,
+    result.ok
+      ? { saved: "Declined. The dates are free again and nothing was charged." }
+      : { error: "This request has already been decided." },
   );
 }
 

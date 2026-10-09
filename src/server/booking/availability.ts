@@ -1,5 +1,5 @@
 import "server-only";
-import { and, eq, gt, inArray, isNull, ne, or, sql } from "drizzle-orm";
+import { and, eq, gt, inArray, isNull, notInArray, or, sql } from "drizzle-orm";
 import { addDays, eachNight, type DateRange, type IsoDate } from "@/lib/dates";
 import type { Executor } from "@/server/db/client";
 import {
@@ -8,7 +8,7 @@ import {
   ownerBlocks,
   reservations,
 } from "@/server/db/schema";
-import { BLOCKING_STATUSES } from "./reservation-state";
+import { BLOCKING_STATUSES, EXPIRING_STATUSES } from "./reservation-state";
 
 /**
  * Availability = internal blocking reservations and live holds + owner blocks
@@ -21,6 +21,7 @@ import { BLOCKING_STATUSES } from "./reservation-state";
 
 export type BlockSource =
   | "DIRECT_BOOKING"
+  /** A request awaiting the owner, an approved request awaiting payment, or an instant-mode hold. */
   | "HOLD"
   | "OWNER_BLOCK"
   | "GOOGLE"
@@ -57,9 +58,10 @@ export async function loadBlocks(
           eq(reservations.propertyId, propertyId),
           inArray(reservations.status, [...BLOCKING_STATUSES]),
           sql`${reservations.stay} && ${widened}`,
-          // A hold past its expiry no longer blocks, even before the sweeper runs.
+          // A request or hold past its deadline no longer blocks, even before
+          // the sweeper runs.
           or(
-            ne(reservations.status, "PENDING_PAYMENT"),
+            notInArray(reservations.status, [...EXPIRING_STATUSES]),
             gt(reservations.holdExpiresAt, now),
           ),
         ),
@@ -106,7 +108,7 @@ export async function loadBlocks(
       id: r.id,
       start: r.start as IsoDate,
       end: r.end as IsoDate,
-      source: (r.status === "PENDING_PAYMENT"
+      source: (EXPIRING_STATUSES.includes(r.status)
         ? "HOLD"
         : "DIRECT_BOOKING") as BlockSource,
     })),

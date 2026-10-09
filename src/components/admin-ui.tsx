@@ -98,12 +98,15 @@ export function NotReady({ reason }: { reason: string }) {
 }
 
 const statusTone: Record<string, string> = {
+  REQUESTED: "Request (awaiting your decision)",
+  APPROVED: "Approved (awaiting payment)",
+  DECLINED: "Declined",
   CONFIRMED: "Confirmed",
   PAYMENT_DUE: "Balance due",
-  PENDING_PAYMENT: "Hold (awaiting payment)",
+  PENDING_PAYMENT: "Instant hold (awaiting payment)",
   REQUIRES_REVIEW: "Needs review",
   CANCELLED: "Cancelled",
-  EXPIRED: "Expired hold",
+  EXPIRED: "Expired",
   REFUND_PENDING: "Refund pending",
   REFUNDED: "Refunded",
 };
