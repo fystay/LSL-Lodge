@@ -33,6 +33,7 @@ test("admin pages require sign-in", async ({ page }) => {
     "/admin/blocks",
     "/admin/pricing",
     "/admin/settings",
+    "/admin/calendars",
   ]) {
     await page.goto(path);
     await expect(page).toHaveURL(/\/admin\/login$/);
@@ -132,6 +133,23 @@ test("invalid admin input is rejected with a clear message", async ({
   ).toBeVisible();
 });
 
+test("calendar sync only accepts Airbnb links and explains the delay", async ({
+  page,
+}) => {
+  await signIn(page);
+  await page.goto("/admin/calendars");
+  await expect(
+    page.getByText(/can take a while to\s+appear here/),
+  ).toBeVisible();
+  await page
+    .getByLabel("Airbnb export link")
+    .fill("https://example.com/cal.ics");
+  await page.getByRole("button", { name: "Add calendar" }).click();
+  await expect(
+    page.getByRole("alert").filter({ hasText: "Only Airbnb calendar links" }),
+  ).toBeVisible();
+});
+
 test("admin pages have no automatically detectable WCAG A/AA violations", async ({
   page,
 }) => {
@@ -144,6 +162,7 @@ test("admin pages have no automatically detectable WCAG A/AA violations", async 
     "/admin/blocks",
     "/admin/pricing",
     "/admin/settings",
+    "/admin/calendars",
   ]) {
     await page.goto(path);
     await settleAnimations(page);

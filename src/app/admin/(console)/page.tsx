@@ -9,6 +9,7 @@ import {
 import { formatStayDate, type IsoDate } from "@/lib/dates";
 import { formatMoney } from "@/lib/money";
 import { adminContext } from "@/server/admin/context";
+import { isStale } from "@/server/calendar/sync";
 import {
   calendarSources,
   pendingRequests,
@@ -161,9 +162,15 @@ async function Overview({
       <AdminSection id="sync" title="Calendar connections">
         {sources.length === 0 ? (
           <p>
-            No external calendars are connected yet. Airbnb and Google Calendar
-            sync arrive in Phase 4; until then, block dates booked elsewhere by
-            hand under{" "}
+            No external calendars are connected yet. Add your Airbnb calendar
+            under{" "}
+            <Link
+              href="/admin/calendars"
+              className="underline underline-offset-4"
+            >
+              Calendar sync
+            </Link>
+            ; until then, block dates booked elsewhere by hand under{" "}
             <Link href="/admin/blocks" className="underline underline-offset-4">
               Blocked dates
             </Link>
@@ -175,7 +182,9 @@ async function Overview({
               <li key={s.id} className="py-3">
                 <strong>{s.label}</strong> ({s.provider},{" "}
                 {s.direction.toLowerCase()}) —{" "}
-                {s.syncStatus.replaceAll("_", " ").toLowerCase()}
+                {s.enabled && isStale(s, ctx.now)
+                  ? "out of date"
+                  : s.syncStatus.replaceAll("_", " ").toLowerCase()}
                 {s.lastSuccessAt
                   ? `, last success ${s.lastSuccessAt.toISOString()}`
                   : ", never synced"}

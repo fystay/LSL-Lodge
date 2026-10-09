@@ -20,6 +20,7 @@ import { validateStaySearch } from "@/lib/stay-search";
 import {
   calendarStatuses,
   checkStay,
+  calendarSyncDelayed,
   getBookingContext,
   type BookingContext,
 } from "@/server/booking/public";
@@ -200,7 +201,10 @@ async function StayResult({
   today: IsoDate;
   now: Date;
 }) {
-  const { available, quote } = await checkStay(ctx, search, today, now);
+  const [{ available, quote }, syncDelayed] = await Promise.all([
+    checkStay(ctx, search, today, now),
+    calendarSyncDelayed(ctx, now),
+  ]);
   const request = ctx.property.bookingMode === "REQUEST";
   if (!available) {
     return (
@@ -251,6 +255,12 @@ async function StayResult({
             ? "Nothing is reserved or charged yet. Next, you send a booking request; the owner approves it before you pay."
             : "Nothing is reserved yet. The next step holds these dates for you for 30 minutes while you complete your booking."}
         </p>
+        {syncDelayed && (
+          <p className="mt-3 text-sm text-notice-ink">
+            Our link with other booking calendars is running behind, so the
+            owner will double-check these dates before approving.
+          </p>
+        )}
         <Link
           href={`/book?${query}`}
           className="mt-4 flex min-h-12 items-center justify-center rounded-soft bg-pine-800 px-6 font-semibold text-ivory hover:bg-pine-700"

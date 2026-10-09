@@ -4,6 +4,8 @@ import type { Route } from "next";
 import { redirect } from "next/navigation";
 import { createOwnerBlock, removeOwnerBlock } from "@/server/booking/holds";
 import { approveRequest, declineRequest } from "@/server/booking/requests";
+import { addIcalSource, syncIcalSource } from "@/server/calendar/sync";
+import { calendarSources, setCalendarSourceEnabled } from "@/server/admin/data";
 import { signInLocal, signOut } from "@/server/admin/auth";
 import { adminContext } from "@/server/admin/context";
 import {
@@ -160,6 +162,102 @@ export async function declineRequestAction(form: FormData) {
       ? { saved: "Declined. The dates are free again and nothing was charged." }
       : { error: "This request has already been decided." },
   );
+}
+
+// --- Calendar sync ----------------------------------------------------------------------
+
+const FEED_ERROR: Record<string, string> = {
+  invalid_url: "That doesn’t look like a calendar link.",
+  https_required: "The link must start with https:// (or webcal://).",
+  host_not_allowed:
+    "Only Airbnb calendar links (airbnb.com or airbnb.co.uk) can be added here.",
+  credentials_in_url: "The link must not contain a username or password.",
+};
+
+export async function addCalendarSourceAction(form: FormData) {
+  const ctx = await ready();
+  const label =
+    String(form.get("label") ?? "")
+      .trim()
+      .slice(0, 80) || "Airbnb";
+  const url = String(form.get("url") ?? "").slice(0, 2000);
+  let result;
+  try {
+    result = await addIcalSource(ctx.db, {
+      propertyId: ctx.property.id,
+      label,
+      url,
+      actor: ctx.admin.email,
+    });
+  } catch {
+    // Encryption key missing or invalid: never store the URL unencrypted.
+    back("/admin/calendars", {
+      error:
+        "Calendar links can’t be stored securely yet: the encryption key isn’t configured.",
+    });
+  }
+  if (!result.ok)
+    back("/admin/calendars", {
+      error: FEED_ERROR[result.code] ?? "That calendar link can’t be used.",
+    });
+  const sync = await syncIcalSource(ctx.db, result.id);
+  back("/admin/calendars", {
+    saved: sync.ok
+      ? "Calendar added and imported."
+      : `Calendar added, but the first import failed (${sync.code}). It will retry automatically.`,
+  });
+}
+
+export async function syncCalendarSourceAction(form: FormData) {
+  const ctx = await ready();
+  const id = uuid(form.get("id"));
+  if (!id) back("/admin/calendars", { error: "Unknown calendar." });
+  const release = form.get("releaseHeld") === "yes";
+  if (form.get("intent") === "release" && !release)
+    back("/admin/calendars", {
+      error: "Tick the box to confirm releasing those dates.",
+    });
+  const owned = await ownsSource(ctx, id);
+  if (!owned) back("/admin/calendars", { error: "Unknown calendar." });
+  const result = await syncIcalSource(ctx.db, id, {
+    confirmHeldRemovals: release,
+  });
+  back(
+    "/admin/calendars",
+    result.ok
+      ? {
+          saved: result.notModified
+            ? "Synced: no changes since the last import."
+            : `Synced: ${result.inserted} new, ${result.updated} changed, ${result.removed} removed.`,
+        }
+      : {
+          error: `Sync failed (${result.code}). Previously imported dates stay blocked.`,
+        },
+  );
+}
+
+export async function toggleCalendarSourceAction(form: FormData) {
+  const ctx = await ready();
+  const id = uuid(form.get("id"));
+  if (!id) back("/admin/calendars", { error: "Unknown calendar." });
+  const enabled = form.get("enabled") === "true";
+  await setCalendarSourceEnabled(
+    ctx.db,
+    ctx.property.id,
+    id,
+    ctx.admin.email,
+    enabled,
+  );
+  back("/admin/calendars", {
+    saved: enabled
+      ? "Syncing resumed."
+      : "Syncing paused. Dates already imported stay blocked.",
+  });
+}
+
+async function ownsSource(ctx: Awaited<ReturnType<typeof ready>>, id: string) {
+  const sources = await calendarSources(ctx.db, ctx.property.id);
+  return sources.some((s) => s.id === id);
 }
 
 // --- Pricing -------------------------------------------------------------------------

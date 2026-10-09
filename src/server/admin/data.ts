@@ -15,6 +15,7 @@ import type { IsoDate } from "@/lib/dates";
 import type { Database, Executor } from "@/server/db/client";
 import {
   auditLogs,
+  externalBusyPeriods,
   externalCalendarSources,
   feeRules,
   notificationJobs,
@@ -315,11 +316,88 @@ export async function calendarSources(db: Executor, propertyId: string) {
       direction: externalCalendarSources.direction,
       enabled: externalCalendarSources.enabled,
       syncStatus: externalCalendarSources.syncStatus,
+      lastAttemptAt: externalCalendarSources.lastAttemptAt,
       lastSuccessAt: externalCalendarSources.lastSuccessAt,
+      nextSyncAt: externalCalendarSources.nextSyncAt,
+      consecutiveFailures: externalCalendarSources.consecutiveFailures,
       lastErrorCode: externalCalendarSources.lastErrorCode,
+      lastErrorMessage: externalCalendarSources.lastErrorMessage,
+      staleAfterMinutes: externalCalendarSources.staleAfterMinutes,
+      createdAt: externalCalendarSources.createdAt,
+      activePeriods: sql<number>`(SELECT count(*)::int FROM ${externalBusyPeriods} WHERE ${externalBusyPeriods.sourceId} = ${externalCalendarSources.id} AND ${externalBusyPeriods.status} = 'ACTIVE')`,
     })
     .from(externalCalendarSources)
-    .where(eq(externalCalendarSources.propertyId, propertyId));
+    .where(eq(externalCalendarSources.propertyId, propertyId))
+    .orderBy(asc(externalCalendarSources.createdAt));
+}
+
+export async function setCalendarSourceEnabled(
+  db: Database,
+  propertyId: string,
+  id: string,
+  actor: string,
+  enabled: boolean,
+) {
+  return db.transaction(async (tx) => {
+    const [row] = await tx
+      .update(externalCalendarSources)
+      .set({ enabled, ...(enabled ? { nextSyncAt: null } : {}) })
+      .where(
+        and(
+          eq(externalCalendarSources.id, id),
+          eq(externalCalendarSources.propertyId, propertyId),
+        ),
+      )
+      .returning({ id: externalCalendarSources.id });
+    if (row)
+      await audit(
+        tx,
+        actor,
+        enabled ? "calendar_source.resumed" : "calendar_source.paused",
+        "external_calendar_source",
+        id,
+      );
+    return Boolean(row);
+  });
+}
+
+/**
+ * Website requests/bookings that overlap an active imported busy period,
+ * with the source that clashes. Computed live; nothing is overwritten.
+ */
+export async function calendarConflicts(db: Executor, propertyId: string) {
+  return db
+    .select({
+      reservationId: reservations.id,
+      publicRef: reservations.publicRef,
+      status: reservations.status,
+      checkIn: reservations.checkIn,
+      checkOut: reservations.checkOut,
+      source: externalCalendarSources.label,
+      busyStart: externalBusyPeriods.startsOn,
+      busyEnd: externalBusyPeriods.endsOn,
+    })
+    .from(externalBusyPeriods)
+    .innerJoin(
+      externalCalendarSources,
+      eq(externalCalendarSources.id, externalBusyPeriods.sourceId),
+    )
+    .innerJoin(
+      reservations,
+      and(
+        eq(reservations.propertyId, externalBusyPeriods.propertyId),
+        sql`${reservations.stay} && ${externalBusyPeriods.stay}`,
+        inArray(reservations.status, [...BLOCKING_STATUSES]),
+      ),
+    )
+    .where(
+      and(
+        eq(externalBusyPeriods.propertyId, propertyId),
+        eq(externalBusyPeriods.status, "ACTIVE"),
+      ),
+    )
+    .orderBy(asc(reservations.checkIn))
+    .limit(PAGE_SIZE);
 }
 
 export async function pricingOverview(db: Executor, propertyId: string) {

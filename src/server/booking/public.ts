@@ -1,6 +1,9 @@
 import "server-only";
 import { addDays, type IsoDate } from "@/lib/dates";
+import { and, eq } from "drizzle-orm";
 import { db, isDatabaseConfigured, type Database } from "@/server/db/client";
+import { externalCalendarSources } from "@/server/db/schema";
+import { isStale } from "@/server/calendar/sync";
 import { calculateQuote, type QuoteResult } from "@/server/pricing/quote";
 import {
   loadPricingInputs,
@@ -93,4 +96,31 @@ export async function calendarStatuses(
     now,
   );
   return nightStatuses(blocks, window, ctx.property.turnoverNights);
+}
+
+/**
+ * True if an imported calendar (e.g. Airbnb) is failing or out of date, so
+ * the site may not yet know about bookings made elsewhere. Says nothing about
+ * which calendar or why.
+ */
+export async function calendarSyncDelayed(
+  ctx: BookingContext,
+  now: Date,
+): Promise<boolean> {
+  const sources = await ctx.db
+    .select({
+      lastSuccessAt: externalCalendarSources.lastSuccessAt,
+      staleAfterMinutes: externalCalendarSources.staleAfterMinutes,
+      createdAt: externalCalendarSources.createdAt,
+      syncStatus: externalCalendarSources.syncStatus,
+    })
+    .from(externalCalendarSources)
+    .where(
+      and(
+        eq(externalCalendarSources.propertyId, ctx.property.id),
+        eq(externalCalendarSources.enabled, true),
+        eq(externalCalendarSources.direction, "IMPORT"),
+      ),
+    );
+  return sources.some((s) => s.syncStatus !== "OK" || isStale(s, now));
 }

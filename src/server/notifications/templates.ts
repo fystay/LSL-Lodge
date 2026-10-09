@@ -258,6 +258,18 @@ export const TEMPLATES: Record<
       ],
       d,
     ),
+  owner_calendar_conflict: (d) =>
+    render(
+      "Calendar clash: an imported booking overlaps a website booking",
+      [
+        {
+          p: "An imported calendar (such as Airbnb) now shows these dates as busy, and they overlap a website request or booking. Neither has been changed. Please check both and decide which stands; if a guest must be moved or refunded, contact them directly.",
+        },
+        { list: stayLines(d) },
+        adminLink(d),
+      ],
+      d,
+    ),
   owner_calendar_sync_failed: (d) =>
     render(
       "Calendar sync is failing",
