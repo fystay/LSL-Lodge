@@ -15,7 +15,7 @@ enabled and no real emails are sent.
 | Styling          | **Tailwind CSS 4.3** + small owned components (`src/components`)                           | Design tokens live in one `@theme` block. No heavy template to fight.                                                                                                                                                                                                |
 | Database         | **PostgreSQL 16 via Supabase** (proposed, UK/EU region)                                    | Managed Postgres with backups/PITR, plus Supabase Auth (MFA) for the admin area, all from one vendor a small business can administer. Supports `btree_gist` for exclusion constraints. Neon remains a drop-in alternative because the app only needs a Postgres URL. |
 | ORM / migrations | **Drizzle ORM 0.45 + drizzle-kit**                                                         | SQL-first, light, committed SQL migrations; hand-written migrations for what an ORM can't express (exclusion constraints, triggers).                                                                                                                                 |
-| Admin auth       | **Supabase Auth** with TOTP MFA and an email allowlist (Phase 2)                           | Proven managed auth; every server action re-checks the session and role.                                                                                                                                                                                             |
+| Admin auth       | **App-managed accounts** with password + TOTP, server-side sessions, roles                 | Built on Node crypto only, independent of any provider (no Supabase project exists yet). Every page and action re-checks the session and role. See SECURITY.md.                                                                                                      |
 | Payments         | **Stripe Checkout** (hosted), server-created sessions                                      | Smallest PCI scope; SCA is handled by Stripe.                                                                                                                                                                                                                        |
 | Calendar         | Google Calendar API (OAuth 2.0) + iCal import/export for Airbnb                            | See section 4 and [INTEGRATIONS.md](INTEGRATIONS.md).                                                                                                                                                                                                                |
 | Email            | **Resend or Postmark**, behind `EmailSender` (`src/server/notifications/email.ts`)         | Owner to choose; the interface makes the swap cheap.                                                                                                                                                                                                                 |
@@ -217,8 +217,9 @@ scans) with the booking engine on; 64 with it off.
 
 **Engineering still to do**
 
-- **Managed admin login with MFA** (Supabase Auth adapter). Until then admin
-  works only locally (`ADMIN_AUTH_MODE=local` is refused on Vercel).
+- Admin login: **done** (database accounts, password + authenticator app,
+  server-side sessions, roles, step-up, lockout; docs/SECURITY.md). Still
+  open: passkeys and an in-dashboard user management page.
 - **Cancellation and refunds** (owner and guest), including the refund for a
   "refund required" late payment, once the policy is approved. Today the
   owner refunds in the Stripe dashboard and the review reason records why.

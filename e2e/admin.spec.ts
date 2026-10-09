@@ -1,10 +1,11 @@
 import { settleAnimations } from "./support";
 import { expect, test, type Page } from "@playwright/test";
+import { mintAdminSession } from "./admin-auth";
 
 /**
- * Admin journeys against the seeded local database. Needs E2E_BOOKING=true
- * and the server running with ADMIN_AUTH_MODE=local and test credentials
- * (E2E_ADMIN_EMAIL / ADMIN_LOCAL_PASSWORD).
+ * Admin journeys against the seeded local database (E2E_BOOKING=true). The
+ * signed-in owner session is created directly in the local test database;
+ * the real sign-in journey is covered in admin-security.spec.ts.
  */
 test.skip(
   process.env.E2E_BOOKING !== "true",
@@ -12,14 +13,9 @@ test.skip(
 );
 test.describe.configure({ mode: "serial" });
 
-const email = process.env.E2E_ADMIN_EMAIL ?? "owner@example.test";
-const password = process.env.ADMIN_LOCAL_PASSWORD ?? "";
-
 async function signIn(page: Page) {
-  await page.goto("/admin/login");
-  await page.getByLabel("Email").fill(email);
-  await page.getByLabel("Password").fill(password);
-  await page.getByRole("button", { name: "Sign in" }).click();
+  await mintAdminSession(page.context());
+  await page.goto("/admin");
   await expect(
     page.getByRole("heading", { level: 1, name: "Overview" }),
   ).toBeVisible();
@@ -34,22 +30,12 @@ test("admin pages require sign-in", async ({ page }) => {
     "/admin/pricing",
     "/admin/settings",
     "/admin/calendars",
+    "/admin/account",
+    "/admin/reauth",
   ]) {
     await page.goto(path);
     await expect(page).toHaveURL(/\/admin\/login$/);
   }
-});
-
-test("wrong credentials are refused without saying which part was wrong", async ({
-  page,
-}) => {
-  await page.goto("/admin/login");
-  await page.getByLabel("Email").fill(email);
-  await page.getByLabel("Password").fill("definitely-not-the-password");
-  await page.getByRole("button", { name: "Sign in" }).click();
-  await expect(
-    page.getByRole("alert").filter({ hasText: "recognised" }),
-  ).toBeVisible();
 });
 
 test("owner blocks dates, sees them on the calendar, and guests can't book them", async ({
@@ -163,6 +149,8 @@ test("admin pages have no automatically detectable WCAG A/AA violations", async 
     "/admin/pricing",
     "/admin/settings",
     "/admin/calendars",
+    "/admin/account",
+    "/admin/login",
   ]) {
     await page.goto(path);
     await settleAnimations(page);

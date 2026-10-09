@@ -39,11 +39,8 @@
 
 ### Added in Phase 2
 
-- **Admin**: every admin page and server action calls `requireAdmin()`.
-  Sessions are HMAC-signed, httpOnly, `SameSite=Strict` cookies lasting 8
-  hours, and the email allowlist is re-checked on every request. Failed
-  sign-ins don't reveal which field was wrong. The only implemented mode,
-  `local`, is refused when `VERCEL` is set or its secrets are weak.
+- **Admin**: see "Admin authentication" below (replaced the Phase 2
+  local-only shared password in October 2026).
 - **Guest booking access**: a 256-bit random token per booking, stored only as
   a SHA-256 hash, in an httpOnly cookie scoped to `/book/<reference>`. A wrong
   or missing token shows the same not-found page as an unknown reference.
@@ -90,11 +87,53 @@
   explicit environment approval flag (`INSTANT_BOOKING_APPROVED`,
   `STRIPE_LIVE_MODE_APPROVED`, `EMAIL_LIVE_DELIVERY_APPROVED`).
 
+## Admin authentication
+
+Implemented in `src/server/admin/{credentials,accounts,auth}.ts`, using only
+Node's crypto. Supabase Auth was the original plan; app-managed accounts were
+built instead because no dedicated Supabase project exists yet and this
+design needs nothing beyond the database. Switching later remains possible.
+
+- **Accounts** are created only from the CLI (`pnpm admin invite --email …`),
+  which prints a one-time, 24-hour set-up link. The person sets their own
+  password (scrypt, N=2^15, min 12 characters) and enrols an authenticator
+  app (TOTP, RFC 6238, verified against the RFC's test vectors) and receives
+  10 single-use recovery codes. No default or environment-variable
+  credentials exist. `reset` revokes everything and issues a new link;
+  `disable` blocks sign-in and signs the person out everywhere.
+- **Sign-in** is password, then authenticator code (or recovery code). A
+  password-only session opens nothing and lasts 10 minutes. On success the
+  session token is replaced. Codes can't be replayed (last used time step
+  is stored; updated conditionally so concurrent attempts can't both win).
+- **Sessions** are random tokens stored as SHA-256 hashes, in an httpOnly,
+  SameSite=Strict cookie (`__Host-` and Secure in production). Idle timeout
+  30 minutes, absolute limit 8 hours, revocable ("Sign out everywhere"), and
+  invalid once the account is disabled or reset.
+- **Authorisation**: every admin page requires the `view` permission and
+  every admin server action `manage` (OWNER only; VIEWER is read-only).
+  Refusals are audit-logged. The role comes only from the database record.
+- **Step-up**: pricing, payment plan, settings, adding calendar links and
+  releasing held calendar removals require the second factor within the
+  last 15 minutes.
+- **CSRF**: Next.js rejects a server action whose Origin differs from the
+  host but allows requests without an Origin; admin actions and sign-in
+  additionally require a matching Origin. An E2E test proves a request
+  without Origin was accepted before this check and is refused with it.
+- **Brute force**: 10 attempts per IP per 15 minutes across sign-in steps;
+  per-account lockout after 5 failures (password or code), 15 minutes
+  doubling to 24 hours. Unknown emails take the same time as wrong
+  passwords, and every message is the same generic one.
+- **Audit**: enrolment issued/completed, sign-in success and failure,
+  lockout, recovery-code use, step-up, sign-out, revocation, disable/enable,
+  and forbidden attempts.
+- **Requires** `DATABASE_URL` and `CREDENTIALS_ENCRYPTION_KEY`; without them
+  the admin area shows that sign-in isn't set up.
+
+Not yet done: a WebAuthn/passkey option, an in-dashboard user management
+page (CLI only for now), and email notification of new sign-ins.
+
 ## Required before accepting bookings
 
-- Managed admin auth with MFA (Supabase adapter) to replace local mode on
-  deployed sites; re-authentication for sensitive actions. (Server-side checks
-  on every route and action are already in place.)
 - CSRF: server actions are POST-only with Origin checks by Next.js. The custom
   route handlers are the Stripe webhook (signature-verified), the job routes
   (bearer secret), the read-only export feed, and the email-link route, whose

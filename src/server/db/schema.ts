@@ -180,6 +180,9 @@ export const notificationStatus = pgEnum("notification_status", [
 
 export const recipientKind = pgEnum("recipient_kind", ["GUEST", "OWNER"]);
 
+/** OWNER: everything. VIEWER: read-only access to the dashboard. */
+export const adminRole = pgEnum("admin_role", ["OWNER", "VIEWER"]);
+
 export const actorType = pgEnum("actor_type", [
   "SYSTEM",
   "OWNER",
@@ -695,4 +698,69 @@ export const rateLimits = pgTable(
     count: integer("count").notNull(),
   },
   (t) => [index("rate_limits_window_idx").on(t.windowStart)],
+);
+
+// --- Admin accounts ---------------------------------------------------------------
+
+/**
+ * Dashboard accounts (src/server/admin/auth.ts). Passwords are scrypt hashes;
+ * TOTP secrets are AES-256-GCM encrypted; recovery codes and enrolment
+ * tokens are stored only as SHA-256 hashes. An account can't sign in until
+ * its owner has completed enrolment (password + authenticator).
+ */
+export const adminUsers = pgTable(
+  "admin_users",
+  {
+    id: id(),
+    email: text("email").notNull().unique(),
+    role: adminRole("role").notNull(),
+    passwordHash: text("password_hash"),
+    totpSecretEncrypted: text("totp_secret_encrypted"),
+    /** Last accepted TOTP time step, so a code can't be replayed. */
+    totpLastStep: integer("totp_last_step"),
+    recoveryCodeHashes: text("recovery_code_hashes").array(),
+    enrolmentTokenHash: text("enrolment_token_hash").unique(),
+    enrolmentExpiresAt: timestamp("enrolment_expires_at", {
+      withTimezone: true,
+    }),
+    enrolledAt: timestamp("enrolled_at", { withTimezone: true }),
+    failedAttempts: integer("failed_attempts").notNull().default(0),
+    lockedUntil: timestamp("locked_until", { withTimezone: true }),
+    disabledAt: timestamp("disabled_at", { withTimezone: true }),
+    lastLoginAt: timestamp("last_login_at", { withTimezone: true }),
+    ...timestamps,
+  },
+  (t) => [
+    check(
+      "admin_users_enrolled_has_credentials",
+      sql`${t.enrolledAt} IS NULL OR (${t.passwordHash} IS NOT NULL AND ${t.totpSecretEncrypted} IS NOT NULL)`,
+    ),
+  ],
+);
+
+/**
+ * Server-side admin sessions. The cookie holds a random token; only its hash
+ * is stored. A session is usable only after the second factor
+ * (`mfaVerifiedAt`), expires after idle time and an absolute limit, and can
+ * be revoked.
+ */
+export const adminSessions = pgTable(
+  "admin_sessions",
+  {
+    id: id(),
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => adminUsers.id, { onDelete: "cascade" }),
+    tokenHash: text("token_hash").notNull().unique(),
+    mfaVerifiedAt: timestamp("mfa_verified_at", { withTimezone: true }),
+    /** Last time the second factor was re-entered, for sensitive actions. */
+    reauthenticatedAt: timestamp("reauthenticated_at", { withTimezone: true }),
+    lastSeenAt: timestamp("last_seen_at", { withTimezone: true }).notNull(),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    revokedAt: timestamp("revoked_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (t) => [index("admin_sessions_user_idx").on(t.userId)],
 );

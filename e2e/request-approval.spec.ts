@@ -1,5 +1,6 @@
 import { settleAnimations } from "./support";
 import { expect, test, type Browser, type Page } from "@playwright/test";
+import { mintAdminSession } from "./admin-auth";
 
 /**
  * Host-approval journey across two browsers: a guest sends a request, the
@@ -7,16 +8,13 @@ import { expect, test, type Browser, type Page } from "@playwright/test";
  * server-side state. No payment is taken: the CI preview has no Stripe keys,
  * and the guest is told plainly that payment isn't switched on.
  *
- * Needs E2E_BOOKING=true, a seeded local database, and ADMIN_AUTH_MODE=local.
+ * Needs E2E_BOOKING=true and a seeded local database.
  */
 test.skip(
   process.env.E2E_BOOKING !== "true",
   "request journey needs a seeded local database",
 );
 test.describe.configure({ mode: "serial" });
-
-const email = process.env.E2E_ADMIN_EMAIL ?? "owner@example.test";
-const password = process.env.ADMIN_LOCAL_PASSWORD ?? "";
 
 // Each project uses its own weeks (they share one database). Mon → Thu.
 const weeks = {
@@ -42,11 +40,9 @@ async function sendRequest(page: Page, [checkIn, checkOut]: readonly string[]) {
 
 async function ownerOpens(browser: Browser, ref: string) {
   const context = await browser.newContext();
+  await mintAdminSession(context);
   const owner = await context.newPage();
-  await owner.goto("/admin/login");
-  await owner.getByLabel("Email").fill(email);
-  await owner.getByLabel("Password").fill(password);
-  await owner.getByRole("button", { name: "Sign in" }).click();
+  await owner.goto("/admin");
   const requests = owner.getByRole("region", {
     name: "Requests awaiting your decision",
   });

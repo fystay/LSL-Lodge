@@ -13,10 +13,9 @@ import {
 import {
   decryptCredential,
   encryptCredential,
-  parseCredentialKey,
   type CredentialKey,
 } from "@/server/crypto/credentials";
-import { encryptionEnv } from "@/server/env";
+import { credentialKeys } from "@/server/crypto/keys";
 import { BLOCKING_STATUSES } from "@/server/booking/reservation-state";
 import { enqueueNotification } from "@/server/notifications/outbox";
 import { FeedParseError, parseIcalFeed } from "./ical-parse";
@@ -76,16 +75,6 @@ export type SyncOutcome =
 
 const context = (sourceId: string) =>
   `external_calendar_source:${sourceId}:url`;
-
-export function credentialKeys(): CredentialKey[] {
-  const env = encryptionEnv();
-  return [
-    parseCredentialKey(
-      env.CREDENTIALS_ENCRYPTION_KEY,
-      env.CREDENTIALS_ENCRYPTION_KEY_VERSION,
-    ),
-  ];
-}
 
 /** Adds an import source. The URL is validated, then stored only encrypted. */
 export async function addIcalSource(

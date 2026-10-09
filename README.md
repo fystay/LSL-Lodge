@@ -69,15 +69,15 @@ pnpm db:seed:dev            # placeholder property, rates and payment plan (loca
 
 # In .env.local (never commit real values):
 #   BOOKING_PREVIEW=true
-#   ADMIN_AUTH_MODE=local
-#   ADMIN_EMAILS=you@example.com
-#   ADMIN_LOCAL_PASSWORD=<16+ characters>
-#   ADMIN_SESSION_SECRET=<32+ random characters>
+#   CREDENTIALS_ENCRYPTION_KEY=<openssl rand -base64 32>
+#   CREDENTIALS_ENCRYPTION_KEY_VERSION=1
 pnpm dev                    # /availability for guests, /admin for the owner
+pnpm admin invite --email you@example.com   # prints a one-time set-up link
 ```
 
 The seed's prices are made up. Real rates are entered by the owner in
-`/admin/pricing`. Local admin sign-in is refused on any Vercel deployment.
+`/admin/pricing`. Admin accounts need an authenticator app; see
+docs/SECURITY.md ("Admin authentication") and `scripts/admin.mts`.
 
 To try the full journey: request dates at `/availability`, approve the
 request from the `/admin` overview, then return to the booking page (same
@@ -119,6 +119,7 @@ To run the booking and admin E2E tests too:
 | `pnpm test:e2e`                | Playwright E2E and axe accessibility tests against the production build (`pnpm build` first)                 |
 | `pnpm check`                   | Format, lint, types and unit tests                                                                           |
 | `pnpm db:seed:dev`             | Placeholder data for a **local** database (refuses any other host)                                           |
+| `pnpm admin <command>`         | Admin accounts: `invite`, `reset`, `disable`, `enable`, `list`                                               |
 
 CI (`.github/workflows/ci.yml`) runs all of the above, plus a production
 build, a dependency audit and integration tests against a Postgres service
