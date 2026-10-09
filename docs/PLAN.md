@@ -227,9 +227,9 @@ scans) with the booking engine on; 64 with it off.
   record a refund). The state machine and checks exist; the UI doesn't yet.
 - **Balance payments** for deposit plans (not needed for full payment).
 - **Google Calendar** OAuth, free/busy import and app-calendar export.
-- **Scheduler**: the three job routes need a scheduler (Vercel Cron needs
-  the Pro plan for 5–15 minute polling, or Supabase `pg_cron`). Not
-  configured: that is a deployment change needing approval.
+- **Scheduler**: the job system (leases, run log, health endpoint, alerts,
+  `/admin/system`) is built; a scheduler calling `/api/jobs/tick` and an
+  uptime monitor on `/api/health` still need configuring (docs/SCHEDULER.md).
 - **Stripe reconciliation job**, monitoring (Sentry), backups and restore
   test, runbooks.
 - Public pages still read facts from `src/content/property.ts`, not the

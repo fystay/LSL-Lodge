@@ -90,15 +90,13 @@ previewed on the booking's admin page. Optional extras: `GUEST_LINK_SECRET`
 
 ### Scheduled jobs
 
-Each needs `Authorization: Bearer $CRON_SECRET` (32+ characters). No
-scheduler is configured yet (owner decision: Vercel Pro cron or Supabase
-`pg_cron`).
-
-| Endpoint                       | Suggested interval | Does                                                                 |
-| ------------------------------ | ------------------ | -------------------------------------------------------------------- |
-| `/api/jobs/expire-holds`       | 5 minutes          | Expires lapsed requests/approvals, closes their Stripe sessions      |
-| `/api/jobs/send-notifications` | 1–5 minutes        | Delivers queued emails (or marks them not sent when delivery is off) |
-| `/api/jobs/sync-calendars`     | 5 minutes          | Polls imported iCal feeds that are due                               |
+A scheduler must call `GET /api/jobs/tick` every 5 minutes with
+`Authorization: Bearer $CRON_SECRET`; it runs request expiry, email
+delivery, Airbnb sync and housekeeping, each under a lease so runs never
+overlap. An uptime monitor should call `/api/health` (with
+`HEALTHCHECK_SECRET`). **No scheduler is configured yet**; see
+[docs/SCHEDULER.md](docs/SCHEDULER.md). `/admin/system` shows every run and
+has "Run now".
 
 Stripe calls `/api/webhooks/stripe` (signature-verified).
 

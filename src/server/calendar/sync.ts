@@ -121,20 +121,66 @@ export async function addIcalSource(
   return { ok: true, id };
 }
 
+export interface SyncOptions {
+  now?: Date;
+  fetcher?: FeedFetcher;
+  keys?: CredentialKey[];
+  /** Apply removals that were held because the feed emptied. Owner-confirmed only. */
+  confirmHeldRemovals?: boolean;
+  /** Admin email, recorded when the owner confirms held removals. */
+  actor?: string;
+}
+
+/** Longest a single sync may hold its source (fetch timeout is 10 s). */
+const SOURCE_LEASE_MS = 2 * 60_000;
+
+/**
+ * Syncs one source, holding a per-source lease so a scheduled sync and a
+ * manual "Sync now" can't process the same feed at once. A sync that finds
+ * the lease held returns `sync_in_progress` without counting as a failure.
+ */
 export async function syncIcalSource(
   db: Database,
   sourceId: string,
-  options: {
-    now?: Date;
-    fetcher?: FeedFetcher;
-    keys?: CredentialKey[];
-    /** Apply removals that were held because the feed emptied. Owner-confirmed only. */
-    confirmHeldRemovals?: boolean;
-    /** Admin email, recorded when the owner confirms held removals. */
-    actor?: string;
-  } = {},
+  options: SyncOptions = {},
 ): Promise<SyncOutcome> {
   const now = options.now ?? new Date();
+  const [leased] = await db
+    .update(externalCalendarSources)
+    .set({ syncLeaseUntil: new Date(now.getTime() + SOURCE_LEASE_MS) })
+    .where(
+      and(
+        eq(externalCalendarSources.id, sourceId),
+        or(
+          isNull(externalCalendarSources.syncLeaseUntil),
+          lte(externalCalendarSources.syncLeaseUntil, now),
+        ),
+      ),
+    )
+    .returning({ id: externalCalendarSources.id });
+  if (!leased) {
+    const [exists] = await db
+      .select({ id: externalCalendarSources.id })
+      .from(externalCalendarSources)
+      .where(eq(externalCalendarSources.id, sourceId));
+    return { ok: false, code: exists ? "sync_in_progress" : "not_found" };
+  }
+  try {
+    return await syncHeldSource(db, sourceId, { ...options, now });
+  } finally {
+    await db
+      .update(externalCalendarSources)
+      .set({ syncLeaseUntil: null })
+      .where(eq(externalCalendarSources.id, sourceId));
+  }
+}
+
+async function syncHeldSource(
+  db: Database,
+  sourceId: string,
+  options: SyncOptions & { now: Date },
+): Promise<SyncOutcome> {
+  const now = options.now;
   const [row] = await db
     .select({ source: externalCalendarSources, timeZone: properties.timeZone })
     .from(externalCalendarSources)

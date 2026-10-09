@@ -26,6 +26,7 @@ export const NOTIFICATION_TEMPLATES = {
   owner_payment_needs_review: "OWNER",
   owner_calendar_sync_failed: "OWNER",
   owner_calendar_conflict: "OWNER",
+  owner_system_alert: "OWNER",
 } as const;
 
 export type NotificationTemplate = keyof typeof NOTIFICATION_TEMPLATES;

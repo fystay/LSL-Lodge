@@ -7,6 +7,8 @@ import { approveRequest, declineRequest } from "@/server/booking/requests";
 import { addIcalSource, syncIcalSource } from "@/server/calendar/sync";
 import { calendarSources, setCalendarSourceEnabled } from "@/server/admin/data";
 import { requireAdmin } from "@/server/admin/auth";
+import { JOBS } from "@/server/jobs/definitions";
+import { runJob } from "@/server/jobs/runner";
 import { adminContext } from "@/server/admin/context";
 import {
   createFeeRule,
@@ -249,6 +251,23 @@ export async function toggleCalendarSourceAction(form: FormData) {
 async function ownsSource(ctx: Awaited<ReturnType<typeof ready>>, id: string) {
   const sources = await calendarSources(ctx.db, ctx.property.id);
   return sources.some((s) => s.id === id);
+}
+
+// --- Background tasks -------------------------------------------------------------------
+
+export async function runJobNowAction(form: FormData) {
+  const ctx = await ready("/admin/system");
+  const job = JOBS.find((j) => j.name === form.get("job"));
+  if (!job) back("/admin/system", { error: "Unknown task." });
+  const outcome = await runJob(ctx.db, job);
+  back(
+    "/admin/system",
+    outcome.status === "SUCCEEDED"
+      ? { saved: "Done." }
+      : outcome.status === "SKIPPED"
+        ? { error: "That task is already running. Try again in a minute." }
+        : { error: `That task failed (${outcome.errorCode}).` },
+  );
 }
 
 // --- Pricing -------------------------------------------------------------------------

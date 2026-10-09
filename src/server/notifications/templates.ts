@@ -270,6 +270,17 @@ export const TEMPLATES: Record<
       ],
       d,
     ),
+  owner_system_alert: (d) =>
+    render(
+      "Booking system needs attention",
+      [
+        {
+          p: "A routine check found a problem with the booking system's background work (for example emails not being sent, payment notifications failing, calendar sync out of date, or a scheduled job not running). Details are on the System page in admin.",
+        },
+        { link: "Open the System page", href: `${d.siteUrl}/admin/system` },
+      ],
+      d,
+    ),
   owner_calendar_sync_failed: (d) =>
     render(
       "Calendar sync is failing",

@@ -183,6 +183,12 @@ export const recipientKind = pgEnum("recipient_kind", ["GUEST", "OWNER"]);
 /** OWNER: everything. VIEWER: read-only access to the dashboard. */
 export const adminRole = pgEnum("admin_role", ["OWNER", "VIEWER"]);
 
+export const jobRunStatus = pgEnum("job_run_status", [
+  "RUNNING",
+  "SUCCEEDED",
+  "FAILED",
+]);
+
 export const actorType = pgEnum("actor_type", [
   "SYSTEM",
   "OWNER",
@@ -525,6 +531,8 @@ export const externalCalendarSources = pgTable(
     providerSyncToken: text("provider_sync_token"),
     staleAfterMinutes: integer("stale_after_minutes").notNull().default(60),
     nextSyncAt: timestamp("next_sync_at", { withTimezone: true }),
+    /** While set in the future, a sync of this source is in progress. */
+    syncLeaseUntil: timestamp("sync_lease_until", { withTimezone: true }),
     ...timestamps,
   },
   (t) => [
@@ -763,4 +771,33 @@ export const adminSessions = pgTable(
       .defaultNow(),
   },
   (t) => [index("admin_sessions_user_idx").on(t.userId)],
+);
+
+// --- Background jobs ----------------------------------------------------------------
+
+/**
+ * One row per job name. A runner holds the lease until `leasedUntil`; a
+ * runner that dies simply lets it expire. Prevents overlapping runs.
+ */
+export const jobLeases = pgTable("job_leases", {
+  name: text("name").primaryKey(),
+  holder: text("holder").notNull(),
+  leasedUntil: timestamp("leased_until", { withTimezone: true }).notNull(),
+});
+
+/** History of job runs, for the admin System page and the health endpoint. */
+export const jobRuns = pgTable(
+  "job_runs",
+  {
+    id: id(),
+    name: text("name").notNull(),
+    status: jobRunStatus("status").notNull(),
+    startedAt: timestamp("started_at", { withTimezone: true }).notNull(),
+    finishedAt: timestamp("finished_at", { withTimezone: true }),
+    durationMs: integer("duration_ms"),
+    /** Counts only (e.g. {"expired": 2}); never personal data. */
+    summary: jsonb("summary").notNull().default({}),
+    errorCode: text("error_code"),
+  },
+  (t) => [index("job_runs_name_started_idx").on(t.name, t.startedAt)],
 );

@@ -31,6 +31,7 @@ test("admin pages require sign-in", async ({ page }) => {
     "/admin/settings",
     "/admin/calendars",
     "/admin/account",
+    "/admin/system",
     "/admin/reauth",
   ]) {
     await page.goto(path);
@@ -150,6 +151,7 @@ test("admin pages have no automatically detectable WCAG A/AA violations", async 
     "/admin/settings",
     "/admin/calendars",
     "/admin/account",
+    "/admin/system",
     "/admin/login",
   ]) {
     await page.goto(path);

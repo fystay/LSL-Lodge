@@ -43,6 +43,13 @@
       "when": 1791579677629,
       "tag": "0005_row_level_security",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1791579926964,
+      "tag": "0006_job_runs",
+      "breakpoints": true
     }
   ]
 }

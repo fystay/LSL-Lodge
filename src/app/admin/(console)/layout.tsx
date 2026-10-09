@@ -9,6 +9,7 @@ const nav = [
   { href: "/admin/calendars", label: "Calendar sync" },
   { href: "/admin/pricing", label: "Pricing" },
   { href: "/admin/settings", label: "Settings" },
+  { href: "/admin/system", label: "System" },
   { href: "/admin/account", label: "Account" },
 ] as const;
 
