@@ -1,17 +1,31 @@
+import { connection } from "next/server";
 import { Suspense } from "react";
-import { adminAuthMode } from "@/server/admin/auth";
-import { signInAction } from "../actions";
+import { adminAvailable } from "@/server/admin/auth";
+import { signInAction } from "../auth-actions";
+import {
+  AuthError,
+  AuthPage,
+  Unavailable,
+  authButton,
+  authInput,
+} from "../auth-ui";
 
 export const metadata = { title: "Sign in" };
 
+const ERRORS: Record<string, string> = {
+  "1": "Those details weren’t recognised, or the account is temporarily locked after too many attempts. Try again later.",
+  expired: "Your sign-in took too long. Please start again.",
+  origin:
+    "That request couldn’t be verified. Please sign in again from this page.",
+};
+
 export default function LoginPage({ searchParams }: PageProps<"/admin/login">) {
   return (
-    <main id="main" className="mx-auto w-full max-w-md flex-1 px-4 py-16">
-      <h1 className="text-title">Owner sign-in</h1>
+    <AuthPage title="Owner sign-in">
       <Suspense fallback={null}>
         <LoginForm searchParams={searchParams} />
       </Suspense>
-    </main>
+    </AuthPage>
   );
 }
 
@@ -21,64 +35,47 @@ async function LoginForm({
   searchParams: PageProps<"/admin/login">["searchParams"];
 }) {
   const { error } = await searchParams;
-  const mode = adminAuthMode();
-  if (mode !== "local") {
-    return (
-      <p
-        role="status"
-        className="mt-6 rounded-soft border border-notice-ink/30 bg-notice p-4 text-notice-ink"
-      >
-        {mode === "supabase"
-          ? "Owner sign-in with multi-factor authentication is being connected and isn’t available yet."
-          : "Admin sign-in is not enabled on this deployment."}
-      </p>
-    );
-  }
+  await connection();
+  if (!adminAvailable()) return <Unavailable />;
   return (
-    <form action={signInAction} className="mt-8 space-y-5">
-      <p className="text-sm text-ink-muted">
-        Local development sign-in. Not available on deployed sites.
-      </p>
-      {error && (
-        <p
-          role="alert"
-          className="rounded-soft border border-danger/40 bg-ivory p-3 font-medium text-danger"
-        >
-          Those details weren&rsquo;t recognised.
-        </p>
+    <>
+      {typeof error === "string" && ERRORS[error] && (
+        <AuthError>{ERRORS[error]}</AuthError>
       )}
-      <div>
-        <label htmlFor="email" className="font-semibold text-pine-900">
-          Email
-        </label>
-        <input
-          id="email"
-          name="email"
-          type="email"
-          autoComplete="username"
-          required
-          className="mt-1.5 block min-h-12 w-full rounded-soft border border-sage-600/60 bg-ivory px-3"
-        />
-      </div>
-      <div>
-        <label htmlFor="password" className="font-semibold text-pine-900">
-          Password
-        </label>
-        <input
-          id="password"
-          name="password"
-          type="password"
-          autoComplete="current-password"
-          required
-          className="mt-1.5 block min-h-12 w-full rounded-soft border border-sage-600/60 bg-ivory px-3"
-        />
-      </div>
-      <button
-        type="submit"
-        className="min-h-12 rounded-soft bg-pine-800 px-6 font-semibold text-ivory hover:bg-pine-700"
-      >
-        Sign in
-      </button>
-    </form>
+      <form action={signInAction} className="mt-8 space-y-5">
+        <div>
+          <label htmlFor="email" className="font-semibold text-pine-900">
+            Email
+          </label>
+          <input
+            id="email"
+            name="email"
+            type="email"
+            autoComplete="username"
+            required
+            className={authInput}
+          />
+        </div>
+        <div>
+          <label htmlFor="password" className="font-semibold text-pine-900">
+            Password
+          </label>
+          <input
+            id="password"
+            name="password"
+            type="password"
+            autoComplete="current-password"
+            required
+            className={authInput}
+          />
+        </div>
+        <button type="submit" className={authButton}>
+          Continue
+        </button>
+        <p className="text-sm text-ink-muted">
+          You&rsquo;ll be asked for a code from your authenticator app next.
+        </p>
+      </form>
+    </>
   );
 }

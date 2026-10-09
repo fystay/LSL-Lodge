@@ -19,6 +19,7 @@ import {
   check,
   customType,
   date,
+  foreignKey,
   index,
   integer,
   jsonb,
@@ -179,6 +180,15 @@ export const notificationStatus = pgEnum("notification_status", [
 ]);
 
 export const recipientKind = pgEnum("recipient_kind", ["GUEST", "OWNER"]);
+
+/** OWNER: everything. VIEWER: read-only access to the dashboard. */
+export const adminRole = pgEnum("admin_role", ["OWNER", "VIEWER"]);
+
+export const jobRunStatus = pgEnum("job_run_status", [
+  "RUNNING",
+  "SUCCEEDED",
+  "FAILED",
+]);
 
 export const actorType = pgEnum("actor_type", [
   "SYSTEM",
@@ -374,6 +384,10 @@ export const reservations = pgTable(
     ownerNote: text("owner_note"),
     /** Machine-readable reason a reservation needs the owner (e.g. PAYMENT_AFTER_EXPIRY). */
     reviewReason: text("review_reason"),
+    /** The guest asked to cancel (the owner decides what happens). */
+    cancellationRequestedAt: timestamp("cancellation_requested_at", {
+      withTimezone: true,
+    }),
     idempotencyKey: text("idempotency_key").notNull().unique(),
     /** SHA-256 of the guest's booking-access token; the token is never stored. */
     accessTokenHash: text("access_token_hash").notNull(),
@@ -458,12 +472,25 @@ export const payments = pgTable(
     stripeRefundId: text("stripe_refund_id").unique(),
     /** When the Stripe Checkout Session stops accepting payment. */
     checkoutExpiresAt: timestamp("checkout_expires_at", { withTimezone: true }),
+    /** For a REFUND row: the charge it refunds. */
+    refundOfPaymentId: uuid("refund_of_payment_id"),
+    /** Admin who issued a refund; null for charges. */
+    initiatedBy: text("initiated_by"),
     /** Provider failure code only; never card details or raw messages. */
     failureCode: text("failure_code"),
     succeededAt: timestamp("succeeded_at", { withTimezone: true }),
     ...timestamps,
   },
   (t) => [
+    foreignKey({
+      columns: [t.refundOfPaymentId],
+      foreignColumns: [t.id],
+      name: "payments_refund_of_payment_id_fk",
+    }).onDelete("restrict"),
+    check(
+      "payments_refund_links_charge",
+      sql`(${t.kind} = 'REFUND') = (${t.refundOfPaymentId} IS NOT NULL)`,
+    ),
     check("payments_amount_positive", sql`${t.amountMinor} > 0`),
     index("payments_reservation_idx").on(t.reservationId),
   ],
@@ -522,6 +549,8 @@ export const externalCalendarSources = pgTable(
     providerSyncToken: text("provider_sync_token"),
     staleAfterMinutes: integer("stale_after_minutes").notNull().default(60),
     nextSyncAt: timestamp("next_sync_at", { withTimezone: true }),
+    /** While set in the future, a sync of this source is in progress. */
+    syncLeaseUntil: timestamp("sync_lease_until", { withTimezone: true }),
     ...timestamps,
   },
   (t) => [
@@ -695,4 +724,98 @@ export const rateLimits = pgTable(
     count: integer("count").notNull(),
   },
   (t) => [index("rate_limits_window_idx").on(t.windowStart)],
+);
+
+// --- Admin accounts ---------------------------------------------------------------
+
+/**
+ * Dashboard accounts (src/server/admin/auth.ts). Passwords are scrypt hashes;
+ * TOTP secrets are AES-256-GCM encrypted; recovery codes and enrolment
+ * tokens are stored only as SHA-256 hashes. An account can't sign in until
+ * its owner has completed enrolment (password + authenticator).
+ */
+export const adminUsers = pgTable(
+  "admin_users",
+  {
+    id: id(),
+    email: text("email").notNull().unique(),
+    role: adminRole("role").notNull(),
+    passwordHash: text("password_hash"),
+    totpSecretEncrypted: text("totp_secret_encrypted"),
+    /** Last accepted TOTP time step, so a code can't be replayed. */
+    totpLastStep: integer("totp_last_step"),
+    recoveryCodeHashes: text("recovery_code_hashes").array(),
+    enrolmentTokenHash: text("enrolment_token_hash").unique(),
+    enrolmentExpiresAt: timestamp("enrolment_expires_at", {
+      withTimezone: true,
+    }),
+    enrolledAt: timestamp("enrolled_at", { withTimezone: true }),
+    failedAttempts: integer("failed_attempts").notNull().default(0),
+    lockedUntil: timestamp("locked_until", { withTimezone: true }),
+    disabledAt: timestamp("disabled_at", { withTimezone: true }),
+    lastLoginAt: timestamp("last_login_at", { withTimezone: true }),
+    ...timestamps,
+  },
+  (t) => [
+    check(
+      "admin_users_enrolled_has_credentials",
+      sql`${t.enrolledAt} IS NULL OR (${t.passwordHash} IS NOT NULL AND ${t.totpSecretEncrypted} IS NOT NULL)`,
+    ),
+  ],
+);
+
+/**
+ * Server-side admin sessions. The cookie holds a random token; only its hash
+ * is stored. A session is usable only after the second factor
+ * (`mfaVerifiedAt`), expires after idle time and an absolute limit, and can
+ * be revoked.
+ */
+export const adminSessions = pgTable(
+  "admin_sessions",
+  {
+    id: id(),
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => adminUsers.id, { onDelete: "cascade" }),
+    tokenHash: text("token_hash").notNull().unique(),
+    mfaVerifiedAt: timestamp("mfa_verified_at", { withTimezone: true }),
+    /** Last time the second factor was re-entered, for sensitive actions. */
+    reauthenticatedAt: timestamp("reauthenticated_at", { withTimezone: true }),
+    lastSeenAt: timestamp("last_seen_at", { withTimezone: true }).notNull(),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    revokedAt: timestamp("revoked_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (t) => [index("admin_sessions_user_idx").on(t.userId)],
+);
+
+// --- Background jobs ----------------------------------------------------------------
+
+/**
+ * One row per job name. A runner holds the lease until `leasedUntil`; a
+ * runner that dies simply lets it expire. Prevents overlapping runs.
+ */
+export const jobLeases = pgTable("job_leases", {
+  name: text("name").primaryKey(),
+  holder: text("holder").notNull(),
+  leasedUntil: timestamp("leased_until", { withTimezone: true }).notNull(),
+});
+
+/** History of job runs, for the admin System page and the health endpoint. */
+export const jobRuns = pgTable(
+  "job_runs",
+  {
+    id: id(),
+    name: text("name").notNull(),
+    status: jobRunStatus("status").notNull(),
+    startedAt: timestamp("started_at", { withTimezone: true }).notNull(),
+    finishedAt: timestamp("finished_at", { withTimezone: true }),
+    durationMs: integer("duration_ms"),
+    /** Counts only (e.g. {"expired": 2}); never personal data. */
+    summary: jsonb("summary").notNull().default({}),
+    errorCode: text("error_code"),
+  },
+  (t) => [index("job_runs_name_started_idx").on(t.name, t.startedAt)],
 );

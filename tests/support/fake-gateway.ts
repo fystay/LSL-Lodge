@@ -3,6 +3,8 @@ import type {
   CheckoutSessionSnapshot,
   CreateCheckoutParams,
   PaymentGateway,
+  RefundSnapshot,
+  RefundStatus,
 } from "@/server/payments/gateway";
 
 /**
@@ -14,6 +16,38 @@ export class FakeGateway implements PaymentGateway {
   readonly created: CreateCheckoutParams[] = [];
   readonly expired: string[] = [];
   private byIdempotencyKey = new Map<string, string>();
+  readonly refunds = new Map<string, RefundSnapshot>();
+  /** Status new refunds get (cards usually succeed at once). */
+  refundStatus: RefundStatus = "succeeded";
+  failRefunds = false;
+
+  async createRefund(p: {
+    paymentIntentId: string;
+    amountMinor: number;
+    refundPaymentId: string;
+    reservationId: string;
+    idempotencyKey: string;
+  }) {
+    if (this.failRefunds) throw new Error("Stripe unavailable");
+    const existing = [...this.refunds.values()].find(
+      (r) => r.metadata.idempotency_key === p.idempotencyKey,
+    );
+    if (existing) return existing;
+    const refund: RefundSnapshot = {
+      id: `re_test_${randomUUID().replaceAll("-", "").slice(0, 16)}`,
+      status: this.refundStatus,
+      amount: p.amountMinor,
+      currency: "gbp",
+      paymentIntentId: p.paymentIntentId,
+      metadata: {
+        refund_payment_id: p.refundPaymentId,
+        reservation_id: p.reservationId,
+        idempotency_key: p.idempotencyKey,
+      },
+    };
+    this.refunds.set(refund.id, refund);
+    return refund;
+  }
 
   async createCheckoutSession(p: CreateCheckoutParams) {
     const existing = this.byIdempotencyKey.get(p.idempotencyKey);

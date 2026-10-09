@@ -1,19 +1,22 @@
 "use server";
 
 import type { Route } from "next";
-import { headers } from "next/headers";
 import { redirect } from "next/navigation";
-import { db, isDatabaseConfigured } from "@/server/db/client";
-import {
-  clientIp,
-  consumeRateLimit,
-  LIMITS,
-} from "@/server/security/rate-limit";
 import { createOwnerBlock, removeOwnerBlock } from "@/server/booking/holds";
 import { approveRequest, declineRequest } from "@/server/booking/requests";
+import {
+  cancelByOwner,
+  confirmReviewedBooking,
+  markFlagResolved,
+} from "@/server/booking/resolution";
+import { expireSessions } from "@/server/payments/checkout";
+import { getPaymentGateway } from "@/server/payments/gateway";
+import { issueRefund } from "@/server/payments/refunds";
 import { addIcalSource, syncIcalSource } from "@/server/calendar/sync";
 import { calendarSources, setCalendarSourceEnabled } from "@/server/admin/data";
-import { signInLocal, signOut } from "@/server/admin/auth";
+import { requireAdmin } from "@/server/admin/auth";
+import { JOBS } from "@/server/jobs/definitions";
+import { runJob } from "@/server/jobs/runner";
 import { adminContext } from "@/server/admin/context";
 import {
   createFeeRule,
@@ -27,6 +30,8 @@ import {
 import {
   feeRuleSchema,
   fieldErrors,
+  parsePounds,
+  penceToPounds,
   ownerBlockSchema,
   paymentPolicySchema,
   propertySettingsSchema,
@@ -34,8 +39,11 @@ import {
 } from "@/server/admin/schemas";
 
 /**
- * Every action re-authenticates via adminContext() (requireAdmin) before doing
- * anything. Results are reported by redirecting with a short status message.
+ * Every action calls ready() first: requireAdmin("manage") checks the Origin
+ * header, the session and the OWNER role, and for sensitive changes
+ * (pricing, payment plan, settings, calendar links) a second factor entered
+ * within the last 15 minutes. Results are reported by redirecting with a
+ * short status message. Sign-in actions live in ./auth-actions.ts.
  */
 
 function back(path: string, params: { saved?: string; error?: string }): never {
@@ -47,7 +55,8 @@ function back(path: string, params: { saved?: string; error?: string }): never {
   redirect(`${path}?${query}` as Route);
 }
 
-async function ready() {
+async function ready(returnTo: string, fresh = false) {
+  await requireAdmin("manage", { fresh, returnTo });
   const ctx = await adminContext();
   if (!ctx.ready) back("/admin", { error: ctx.reason });
   return ctx;
@@ -60,31 +69,10 @@ const uuid = (value: FormDataEntryValue | null) => {
   return /^[0-9a-f-]{36}$/i.test(id) ? id : null;
 };
 
-// --- Session ----------------------------------------------------------------------
-
-export async function signInAction(form: FormData) {
-  if (isDatabaseConfigured()) {
-    const ip = clientIp(await headers());
-    if (!(await consumeRateLimit(db(), LIMITS.loginPerIp, ip)))
-      redirect("/admin/login?error=1");
-  }
-  const ok = await signInLocal(
-    String(form.get("email") ?? ""),
-    String(form.get("password") ?? ""),
-  );
-  if (!ok) redirect("/admin/login?error=1");
-  redirect("/admin");
-}
-
-export async function signOutAction() {
-  await signOut();
-  redirect("/admin/login");
-}
-
 // --- Owner blocks -------------------------------------------------------------------
 
 export async function addOwnerBlockAction(form: FormData) {
-  const ctx = await ready();
+  const ctx = await ready("/admin/blocks");
   const parsed = ownerBlockSchema.safeParse(Object.fromEntries(form));
   if (!parsed.success)
     back("/admin/blocks", { error: firstError(parsed.error) });
@@ -104,7 +92,7 @@ export async function addOwnerBlockAction(form: FormData) {
 }
 
 export async function removeOwnerBlockAction(form: FormData) {
-  const ctx = await ready();
+  const ctx = await ready("/admin/blocks");
   const id = uuid(form.get("id"));
   if (!id || form.get("confirm") !== "yes")
     back("/admin/blocks", { error: "Tick the box to confirm removal." });
@@ -130,7 +118,7 @@ const CONFLICT_SOURCE: Record<string, string> = {
 };
 
 export async function approveRequestAction(form: FormData) {
-  const ctx = await ready();
+  const ctx = await ready("/admin");
   const id = uuid(form.get("id"));
   if (!id) back("/admin/bookings", { error: "Unknown booking." });
   const path = `/admin/bookings/${id}`;
@@ -156,7 +144,7 @@ export async function approveRequestAction(form: FormData) {
 }
 
 export async function declineRequestAction(form: FormData) {
-  const ctx = await ready();
+  const ctx = await ready("/admin");
   const id = uuid(form.get("id"));
   if (!id) back("/admin/bookings", { error: "Unknown booking." });
   const path = `/admin/bookings/${id}`;
@@ -176,6 +164,121 @@ export async function declineRequestAction(form: FormData) {
   );
 }
 
+// --- Resolving bookings, cancellations and refunds ----------------------------------------
+// All of these involve money or a guest's stay, so they need a fresh code.
+
+export async function confirmReviewedAction(form: FormData) {
+  const id = uuid(form.get("id"));
+  if (!id) back("/admin/bookings", { error: "Unknown booking." });
+  const path = `/admin/bookings/${id}`;
+  const ctx = await ready(path, true);
+  const result = await confirmReviewedBooking(ctx.db, {
+    propertyId: ctx.property.id,
+    reservationId: id,
+    actor: ctx.admin.email,
+  });
+  if (result.ok)
+    back(path, { saved: "Booking confirmed. The guest will be told." });
+  back(path, {
+    error:
+      result.reason === "NOT_PAID_IN_FULL"
+        ? "Can’t confirm: verified payments don’t cover the agreed total."
+        : result.reason === "CONFLICT"
+          ? `Can’t confirm: the dates now overlap ${result.sources.map((s) => CONFLICT_SOURCE[s] ?? s).join(" and ")}.`
+          : "This booking isn’t awaiting review.",
+  });
+}
+
+export async function cancelBookingAction(form: FormData) {
+  const id = uuid(form.get("id"));
+  if (!id) back("/admin/bookings", { error: "Unknown booking." });
+  const path = `/admin/bookings/${id}`;
+  const ctx = await ready(path, true);
+  if (form.get("confirm") !== "yes")
+    back(path, { error: "Tick the box to confirm the cancellation." });
+  const result = await cancelByOwner(ctx.db, {
+    propertyId: ctx.property.id,
+    reservationId: id,
+    actor: ctx.admin.email,
+    ownerNote: String(form.get("ownerNote") ?? ""),
+  });
+  if (!result.ok)
+    back(path, { error: "This booking can’t be cancelled from here." });
+  const gateway = getPaymentGateway();
+  if (gateway) await expireSessions(gateway, result.openSessions);
+  back(path, {
+    saved: result.paid
+      ? "Cancelled and the dates released. Money was paid: decide on any refund below."
+      : "Cancelled and the dates released. Nothing had been paid.",
+  });
+}
+
+export async function refundAction(form: FormData) {
+  const id = uuid(form.get("id"));
+  const chargeId = uuid(form.get("chargeId"));
+  if (!id || !chargeId) back("/admin/bookings", { error: "Unknown payment." });
+  const path = `/admin/bookings/${id}`;
+  const ctx = await ready(path, true);
+  if (form.get("confirm") !== "yes")
+    back(path, { error: "Tick the box to confirm the refund." });
+  const amount = parsePounds(String(form.get("amount") ?? ""));
+  if (amount === null)
+    back(path, { error: "Enter the refund in pounds, e.g. 150 or 150.50." });
+  const gateway = getPaymentGateway();
+  if (!gateway)
+    back(path, {
+      error:
+        "Card payments aren’t configured, so refunds can’t be issued here.",
+    });
+  const result = await issueRefund(ctx.db, gateway, {
+    propertyId: ctx.property.id,
+    reservationId: id,
+    chargePaymentId: chargeId,
+    amountMinor: amount,
+    actor: ctx.admin.email,
+  });
+  if (result.ok)
+    back(path, {
+      saved:
+        result.status === "SUCCEEDED"
+          ? "Refund issued."
+          : "Refund requested; Stripe is processing it.",
+    });
+  back(path, {
+    error:
+      result.reason === "INVALID_AMOUNT"
+        ? `Enter an amount up to the £${penceToPounds(result.refundableMinor ?? 0)} still refundable on that payment.`
+        : result.reason === "PROVIDER_ERROR"
+          ? "Stripe didn’t accept the refund. Nothing was refunded; try again shortly."
+          : "That payment can’t be refunded.",
+  });
+}
+
+export async function resolveFlagAction(form: FormData) {
+  const id = uuid(form.get("id"));
+  if (!id) back("/admin/bookings", { error: "Unknown booking." });
+  const path = `/admin/bookings/${id}`;
+  const ctx = await ready(path, true);
+  const note = String(form.get("note") ?? "").trim();
+  if (note.length < 3)
+    back(path, { error: "Add a short note saying how it was handled." });
+  const result = await markFlagResolved(ctx.db, {
+    propertyId: ctx.property.id,
+    reservationId: id,
+    actor: ctx.admin.email,
+    note,
+  });
+  back(
+    path,
+    result.ok
+      ? { saved: "Marked as handled." }
+      : {
+          error:
+            "A booking under review must be confirmed or cancelled instead.",
+        },
+  );
+}
+
 // --- Calendar sync ----------------------------------------------------------------------
 
 const FEED_ERROR: Record<string, string> = {
@@ -187,7 +290,7 @@ const FEED_ERROR: Record<string, string> = {
 };
 
 export async function addCalendarSourceAction(form: FormData) {
-  const ctx = await ready();
+  const ctx = await ready("/admin/calendars", true);
   const label =
     String(form.get("label") ?? "")
       .trim()
@@ -221,10 +324,12 @@ export async function addCalendarSourceAction(form: FormData) {
 }
 
 export async function syncCalendarSourceAction(form: FormData) {
-  const ctx = await ready();
+  const ctx = await ready("/admin/calendars");
   const id = uuid(form.get("id"));
   if (!id) back("/admin/calendars", { error: "Unknown calendar." });
   const release = form.get("releaseHeld") === "yes";
+  if (release)
+    await requireAdmin("manage", { fresh: true, returnTo: "/admin/calendars" });
   if (form.get("intent") === "release" && !release)
     back("/admin/calendars", {
       error: "Tick the box to confirm releasing those dates.",
@@ -233,6 +338,7 @@ export async function syncCalendarSourceAction(form: FormData) {
   if (!owned) back("/admin/calendars", { error: "Unknown calendar." });
   const result = await syncIcalSource(ctx.db, id, {
     confirmHeldRemovals: release,
+    actor: ctx.admin.email,
   });
   back(
     "/admin/calendars",
@@ -249,7 +355,7 @@ export async function syncCalendarSourceAction(form: FormData) {
 }
 
 export async function toggleCalendarSourceAction(form: FormData) {
-  const ctx = await ready();
+  const ctx = await ready("/admin/calendars");
   const id = uuid(form.get("id"));
   if (!id) back("/admin/calendars", { error: "Unknown calendar." });
   const enabled = form.get("enabled") === "true";
@@ -272,6 +378,23 @@ async function ownsSource(ctx: Awaited<ReturnType<typeof ready>>, id: string) {
   return sources.some((s) => s.id === id);
 }
 
+// --- Background tasks -------------------------------------------------------------------
+
+export async function runJobNowAction(form: FormData) {
+  const ctx = await ready("/admin/system");
+  const job = JOBS.find((j) => j.name === form.get("job"));
+  if (!job) back("/admin/system", { error: "Unknown task." });
+  const outcome = await runJob(ctx.db, job);
+  back(
+    "/admin/system",
+    outcome.status === "SUCCEEDED"
+      ? { saved: "Done." }
+      : outcome.status === "SKIPPED"
+        ? { error: "That task is already running. Try again in a minute." }
+        : { error: `That task failed (${outcome.errorCode}).` },
+  );
+}
+
 // --- Pricing -------------------------------------------------------------------------
 
 function rateFields(form: FormData) {
@@ -282,7 +405,7 @@ function rateFields(form: FormData) {
 }
 
 export async function createRateRuleAction(form: FormData) {
-  const ctx = await ready();
+  const ctx = await ready("/admin/pricing", true);
   const parsed = rateRuleSchema.safeParse(rateFields(form));
   if (!parsed.success)
     back("/admin/pricing", { error: firstError(parsed.error) });
@@ -291,7 +414,7 @@ export async function createRateRuleAction(form: FormData) {
 }
 
 export async function updateRateRuleAction(form: FormData) {
-  const ctx = await ready();
+  const ctx = await ready("/admin/pricing", true);
   const id = uuid(form.get("id"));
   const parsed = rateRuleSchema.safeParse(rateFields(form));
   if (!id) back("/admin/pricing", { error: "Unknown rate." });
@@ -313,7 +436,7 @@ export async function updateRateRuleAction(form: FormData) {
 }
 
 export async function toggleRateRuleAction(form: FormData) {
-  const ctx = await ready();
+  const ctx = await ready("/admin/pricing", true);
   const id = uuid(form.get("id"));
   if (!id) back("/admin/pricing", { error: "Unknown rate." });
   const active = form.get("active") === "true";
@@ -324,7 +447,7 @@ export async function toggleRateRuleAction(form: FormData) {
 }
 
 export async function createFeeRuleAction(form: FormData) {
-  const ctx = await ready();
+  const ctx = await ready("/admin/pricing", true);
   const parsed = feeRuleSchema.safeParse(Object.fromEntries(form));
   if (!parsed.success)
     back("/admin/pricing", { error: firstError(parsed.error) });
@@ -333,7 +456,7 @@ export async function createFeeRuleAction(form: FormData) {
 }
 
 export async function toggleFeeRuleAction(form: FormData) {
-  const ctx = await ready();
+  const ctx = await ready("/admin/pricing", true);
   const id = uuid(form.get("id"));
   if (!id) back("/admin/pricing", { error: "Unknown fee." });
   const active = form.get("active") === "true";
@@ -344,7 +467,7 @@ export async function toggleFeeRuleAction(form: FormData) {
 }
 
 export async function savePaymentPolicyAction(form: FormData) {
-  const ctx = await ready();
+  const ctx = await ready("/admin/pricing", true);
   const parsed = paymentPolicySchema.safeParse(Object.fromEntries(form));
   if (!parsed.success)
     back("/admin/pricing", { error: firstError(parsed.error) });
@@ -362,7 +485,7 @@ export async function savePaymentPolicyAction(form: FormData) {
 // --- Settings ---------------------------------------------------------------------------
 
 export async function updateSettingsAction(form: FormData) {
-  const ctx = await ready();
+  const ctx = await ready("/admin/settings", true);
   const parsed = propertySettingsSchema.safeParse(Object.fromEntries(form));
   if (!parsed.success)
     back("/admin/settings", { error: firstError(parsed.error) });

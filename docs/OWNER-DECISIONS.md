@@ -18,7 +18,7 @@ Facts gathered so far, with sources: [property-facts-and-policies.md](property-f
 ## Blocking test-mode payments and email (accounts)
 
 - [ ] **Supabase project for the Lodge.** The connected Supabase account has
-      two projects ("fystay-preview" and "fystay@hotmail.com's Project"), both
+      two projects (one named "fystay-preview", one with a personal default name), both
       holding another application's tables and data. We did not touch them.
       Please create a dedicated project (EU/UK region), or confirm one may be
       used. Pricing tier and backups (PITR) to confirm.
@@ -28,8 +28,9 @@ Facts gathered so far, with sources: [property-facts-and-policies.md](property-f
       secret manager. Live mode stays off until you approve it.
 - [ ] **Resend** (or another provider), a sending domain, and DNS access for
       SPF, DKIM and DMARC. Real guest emails stay off until you approve them.
-- [ ] **Admin users**: email addresses allowed into admin (MFA will be
-      required once managed login is added).
+- [ ] **Admin users**: who gets an account (owner, and any read-only
+      viewers). Each person sets up their own password and authenticator
+      app from a one-time link; you'll need a phone authenticator app.
 
 ## Blocking real bookings (business rules)
 
@@ -51,6 +52,11 @@ Facts gathered so far, with sources: [property-facts-and-policies.md](property-f
 - [ ] **Late payments**: if a payment arrives after a booking lapsed, it is
       flagged to you. Confirm your rule: honour the booking if the dates are
       free, or always refund?
+- [ ] **Refund amounts** once your cancellation policy is set. Until then
+      you choose each refund amount yourself in admin.
+- [ ] **Email wording**: the draft messages (request received, approved,
+      declined, cancelled, confirmed and so on) need your approval before
+      real emails are switched on. Admin shows a preview of each.
 
 ## Blocking calendars
 
@@ -66,8 +72,10 @@ Facts gathered so far, with sources: [property-facts-and-policies.md](property-f
       from; agree the site creates its own "bookings" calendar. Needs a
       Google Cloud project and OAuth consent screen. No calendar is written
       until you approve.
-- [ ] **Scheduler**: Vercel Pro (for 5–15 minute polling) or Supabase
-      `pg_cron` to call the job endpoints.
+- [ ] **Scheduler**: Supabase `pg_cron` (recommended once the project
+      exists) or Vercel Cron (plan limits apply). See SCHEDULER.md.
+- [ ] **Uptime monitor** account (e.g. Better Stack or UptimeRobot) to watch
+      the health endpoint and alert you if background work stops.
 
 ## Blocking launch
 

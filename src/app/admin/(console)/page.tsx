@@ -62,7 +62,23 @@ async function Overview({
 
   return (
     <div className="mt-6 space-y-6">
-      <FormStatus error={typeof error === "string" ? error : undefined} />
+      <FormStatus
+        error={
+          error === "forbidden"
+            ? "Your account has read-only access, so that change wasn’t made."
+            : typeof error === "string"
+              ? error
+              : undefined
+        }
+      />
+      {ctx.admin.role === "VIEWER" && (
+        <p
+          role="status"
+          className="rounded-soft border border-sage-300 bg-sage-100 p-3"
+        >
+          You have read-only access. Changes can only be made by the owner.
+        </p>
+      )}
       <p>
         Signed in as <strong>{ctx.admin.email}</strong>. Online bookings are{" "}
         <strong>
@@ -121,7 +137,11 @@ async function Overview({
                 </span>
                 <span>{statusLabel(q.status)}</span>
                 <span className="font-semibold text-danger">
-                  {(q.reviewReason ?? "").replaceAll("_", " ").toLowerCase()}
+                  {q.reviewReason
+                    ? q.reviewReason.replaceAll("_", " ").toLowerCase()
+                    : q.cancellationRequestedAt
+                      ? "guest asked to cancel"
+                      : ""}
                 </span>
               </li>
             ))}

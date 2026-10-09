@@ -69,15 +69,15 @@ pnpm db:seed:dev            # placeholder property, rates and payment plan (loca
 
 # In .env.local (never commit real values):
 #   BOOKING_PREVIEW=true
-#   ADMIN_AUTH_MODE=local
-#   ADMIN_EMAILS=you@example.com
-#   ADMIN_LOCAL_PASSWORD=<16+ characters>
-#   ADMIN_SESSION_SECRET=<32+ random characters>
+#   CREDENTIALS_ENCRYPTION_KEY=<openssl rand -base64 32>
+#   CREDENTIALS_ENCRYPTION_KEY_VERSION=1
 pnpm dev                    # /availability for guests, /admin for the owner
+pnpm admin invite --email you@example.com   # prints a one-time set-up link
 ```
 
 The seed's prices are made up. Real rates are entered by the owner in
-`/admin/pricing`. Local admin sign-in is refused on any Vercel deployment.
+`/admin/pricing`. Admin accounts need an authenticator app; see
+docs/SECURITY.md ("Admin authentication") and `scripts/admin.mts`.
 
 To try the full journey: request dates at `/availability`, approve the
 request from the `/admin` overview, then return to the booking page (same
@@ -90,15 +90,13 @@ previewed on the booking's admin page. Optional extras: `GUEST_LINK_SECRET`
 
 ### Scheduled jobs
 
-Each needs `Authorization: Bearer $CRON_SECRET` (32+ characters). No
-scheduler is configured yet (owner decision: Vercel Pro cron or Supabase
-`pg_cron`).
-
-| Endpoint                       | Suggested interval | Does                                                                 |
-| ------------------------------ | ------------------ | -------------------------------------------------------------------- |
-| `/api/jobs/expire-holds`       | 5 minutes          | Expires lapsed requests/approvals, closes their Stripe sessions      |
-| `/api/jobs/send-notifications` | 1–5 minutes        | Delivers queued emails (or marks them not sent when delivery is off) |
-| `/api/jobs/sync-calendars`     | 5 minutes          | Polls imported iCal feeds that are due                               |
+A scheduler must call `GET /api/jobs/tick` every 5 minutes with
+`Authorization: Bearer $CRON_SECRET`; it runs request expiry, email
+delivery, Airbnb sync and housekeeping, each under a lease so runs never
+overlap. An uptime monitor should call `/api/health` (with
+`HEALTHCHECK_SECRET`). **No scheduler is configured yet**; see
+[docs/SCHEDULER.md](docs/SCHEDULER.md). `/admin/system` shows every run and
+has "Run now".
 
 Stripe calls `/api/webhooks/stripe` (signature-verified).
 
@@ -119,6 +117,7 @@ To run the booking and admin E2E tests too:
 | `pnpm test:e2e`                | Playwright E2E and axe accessibility tests against the production build (`pnpm build` first)                 |
 | `pnpm check`                   | Format, lint, types and unit tests                                                                           |
 | `pnpm db:seed:dev`             | Placeholder data for a **local** database (refuses any other host)                                           |
+| `pnpm admin <command>`         | Admin accounts: `invite`, `reset`, `disable`, `enable`, `list`                                               |
 
 CI (`.github/workflows/ci.yml`) runs all of the above, plus a production
 build, a dependency audit and integration tests against a Postgres service

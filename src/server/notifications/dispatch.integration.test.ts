@@ -145,6 +145,20 @@ describe("dispatchNotifications", () => {
     expect(rows[0].lastErrorCode).toBe("HTTP_503");
   });
 
+  it("fails (not cancels) owner alerts when no owner address is set", async () => {
+    vi.stubEnv("OWNER_NOTIFICATION_EMAIL", "");
+    await request();
+    const result = await dispatchNotifications(db, new MemorySender(), {
+      now: sendAt(),
+    });
+    expect(result).toMatchObject({ sent: 1, failed: 1 });
+    const owner = (await jobs()).find((j) => j.recipientKind === "OWNER")!;
+    expect([owner.status, owner.lastErrorCode]).toEqual([
+      "FAILED",
+      "NO_RECIPIENT",
+    ]);
+  });
+
   it("does not retry a permanent failure", async () => {
     await request();
     const sender = new MemorySender();

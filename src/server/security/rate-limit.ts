@@ -80,9 +80,11 @@ export async function pruneRateLimits(db: Executor, now = new Date()) {
 }
 
 /**
- * The client's IP as seen by the hosting platform. On Vercel the first
- * x-forwarded-for entry is set by the platform; elsewhere this may be absent,
- * in which case all clients share one bucket (fail safe, not open).
+ * The client's IP as seen by the hosting platform. Vercel overwrites
+ * x-forwarded-for with the real client IP and drops client-supplied values
+ * (vercel.com/docs/headers/request-headers), so it can't be spoofed there.
+ * Behind another proxy, check that it does the same; with no header at all,
+ * every client shares one bucket (fails safe, not open).
  */
 export function clientIp(headers: Headers): string {
   return (

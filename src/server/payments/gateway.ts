@@ -36,7 +36,27 @@ export interface CreateCheckoutParams {
   idempotencyKey: string;
 }
 
+export type RefundStatus =
+  "pending" | "requires_action" | "succeeded" | "failed" | "canceled";
+
+export interface RefundSnapshot {
+  id: string;
+  status: RefundStatus;
+  amount: number;
+  currency: string;
+  paymentIntentId: string | null;
+  metadata: Record<string, string>;
+}
+
 export interface PaymentGateway {
+  /** Refunds part or all of a captured payment. Idempotent per key. */
+  createRefund(params: {
+    paymentIntentId: string;
+    amountMinor: number;
+    refundPaymentId: string;
+    reservationId: string;
+    idempotencyKey: string;
+  }): Promise<RefundSnapshot>;
   createCheckoutSession(
     params: CreateCheckoutParams,
   ): Promise<CheckoutSessionSnapshot>;
@@ -68,8 +88,41 @@ export function snapshotFromStripe(
   };
 }
 
+export function refundFromStripe(refund: Stripe.Refund): RefundSnapshot {
+  const intent = refund.payment_intent;
+  return {
+    id: refund.id,
+    status: (refund.status ?? "pending") as RefundStatus,
+    amount: refund.amount,
+    currency: refund.currency,
+    paymentIntentId: typeof intent === "string" ? intent : (intent?.id ?? null),
+    metadata: (refund.metadata ?? {}) as Record<string, string>,
+  };
+}
+
 class StripeCheckoutGateway implements PaymentGateway {
   constructor(private readonly stripe: Stripe) {}
+
+  async createRefund(p: {
+    paymentIntentId: string;
+    amountMinor: number;
+    refundPaymentId: string;
+    reservationId: string;
+    idempotencyKey: string;
+  }) {
+    const refund = await this.stripe.refunds.create(
+      {
+        payment_intent: p.paymentIntentId,
+        amount: p.amountMinor,
+        metadata: {
+          refund_payment_id: p.refundPaymentId,
+          reservation_id: p.reservationId,
+        },
+      },
+      { idempotencyKey: p.idempotencyKey },
+    );
+    return refundFromStripe(refund);
+  }
 
   async createCheckoutSession(p: CreateCheckoutParams) {
     const session = await this.stripe.checkout.sessions.create(

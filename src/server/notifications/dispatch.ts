@@ -47,6 +47,7 @@ const RELEVANT: Partial<Record<NotificationTemplate, ReservationStatus[]>> = {
   request_expired: ["EXPIRED"],
   payment_window_expired: ["EXPIRED"],
   booking_confirmed: ["CONFIRMED", "PAYMENT_DUE"],
+  booking_cancelled: ["CANCELLED", "REFUND_PENDING", "REFUNDED"],
 };
 
 export interface DispatchResult {
@@ -124,8 +125,15 @@ export async function dispatchNotifications(
 
     const prepared = await prepare(db, job, now);
     if ("cancel" in prepared) {
-      await finish({ status: "CANCELLED", lastErrorCode: prepared.cancel });
-      result.cancelled++;
+      // A missing recipient is a configuration fault (e.g. no owner address):
+      // show it as a failure, not a deliberate cancellation.
+      const failed = prepared.cancel === "NO_RECIPIENT";
+      await finish({
+        status: failed ? "FAILED" : "CANCELLED",
+        lastErrorCode: prepared.cancel,
+      });
+      if (failed) result.failed++;
+      else result.cancelled++;
       continue;
     }
     if (!sender) {

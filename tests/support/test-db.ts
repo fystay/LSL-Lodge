@@ -16,7 +16,7 @@ export function testDatabase(max = 10): Database {
 
 export async function resetTables(db: Database) {
   await db.execute(sql`
-    TRUNCATE audit_logs, notification_jobs, webhook_events, calendar_event_links,
+    TRUNCATE admin_sessions, admin_users, rate_limits, audit_logs, notification_jobs, webhook_events, calendar_event_links,
       external_busy_periods, external_calendar_sources, owner_blocks, payments,
       payment_schedule_items, reservations, payment_policies, fee_rules, rate_rules,
       properties RESTART IDENTITY CASCADE

@@ -1,0 +1,99 @@
+import { expect, test } from "@playwright/test";
+import postgres from "postgres";
+import { mintAdminSession } from "./admin-auth";
+
+/**
+ * Real Stripe TEST-MODE lifecycle: request → approval → payment on Stripe's
+ * hosted Checkout with a test card → confirmed exactly once.
+ *
+ * Opt-in only: STRIPE_SANDBOX_E2E=true, a local E2E database
+ * (E2E_BOOKING=true), and STRIPE_SECRET_KEY=sk_test_… plus
+ * STRIPE_WEBHOOK_SECRET from `stripe listen --forward-to
+ * localhost:3100/api/webhooks/stripe`, all in the server's environment.
+ * Never runs in CI. Live keys are refused by the app itself.
+ *
+ * STATUS: written against Stripe Checkout's documented test flow but not yet
+ * run (no test keys were available). Stripe's page selectors may need
+ * adjusting on the first run.
+ */
+test.skip(
+  process.env.STRIPE_SANDBOX_E2E !== "true" ||
+    process.env.E2E_BOOKING !== "true" ||
+    !process.env.STRIPE_SECRET_KEY?.startsWith("sk_test_"),
+  "needs Stripe test keys and STRIPE_SANDBOX_E2E=true",
+);
+test.describe.configure({ mode: "serial" });
+test.setTimeout(120_000);
+
+const stay = { checkIn: "2027-08-16", checkOut: "2027-08-19" }; // Mon → Thu
+
+test("guest pays the approved amount in test mode and the booking confirms once", async ({
+  page,
+  browser,
+}, info) => {
+  test.skip(info.project.name !== "desktop", "run once, on desktop");
+
+  // 1. Guest sends a request.
+  await page.goto(
+    `/book?checkIn=${stay.checkIn}&checkOut=${stay.checkOut}&guests=2`,
+  );
+  await page.getByLabel("Lead guest name").fill("Sandbox Guest");
+  await page.getByLabel("Email address").fill("sandbox-guest@example.test");
+  await page.getByLabel(/I have read the/).check();
+  await page.getByRole("button", { name: "Send booking request" }).click();
+  await expect(page).toHaveURL(/\/book\/LL-[A-Z0-9]{6}$/);
+  const ref = page.url().split("/").at(-1)!;
+
+  // 2. Owner approves.
+  const ownerContext = await browser.newContext();
+  await mintAdminSession(ownerContext);
+  const owner = await ownerContext.newPage();
+  await owner.goto("/admin");
+  await owner
+    .getByRole("region", { name: "Requests awaiting your decision" })
+    .getByRole("link", { name: ref })
+    .click();
+  await owner.getByRole("button", { name: "Approve request" }).click();
+  await expect(owner.getByRole("status")).toContainText("Approved.");
+  await ownerContext.close();
+
+  // 3. Guest pays on Stripe's hosted page with the standard test card.
+  await page.reload();
+  await page.getByRole("button", { name: /Pay .* securely/ }).click();
+  await page.waitForURL(/checkout\.stripe\.com/);
+  await page.locator("#cardNumber").fill("4242 4242 4242 4242");
+  await page.locator("#cardExpiry").fill("12 / 34");
+  await page.locator("#cardCvc").fill("123");
+  await page.locator("#billingName").fill("Sandbox Guest");
+  const postcode = page.locator("#billingPostalCode");
+  if (await postcode.isVisible()) await postcode.fill("LA1 1AA");
+  await page.getByTestId("hosted-payment-submit-button").click();
+
+  // 4–5. Back on our page; confirmed only after server-side verification.
+  await page.waitForURL(new RegExp(`/book/${ref}`), { timeout: 60_000 });
+  await expect(page.getByRole("status").first()).toContainText("Confirmed", {
+    timeout: 60_000,
+  });
+
+  const sql = postgres(process.env.DATABASE_URL!, { max: 1 });
+  try {
+    const [r] =
+      await sql`SELECT id, status FROM reservations WHERE public_ref = ${ref}`;
+    expect(r.status).toBe("CONFIRMED");
+    const pays = await sql`
+      SELECT status, amount_minor FROM payments WHERE reservation_id = ${r.id}`;
+    expect(pays.filter((p) => p.status === "SUCCEEDED")).toHaveLength(1);
+    const confirmed = await sql`
+      SELECT count(*)::int AS n FROM audit_logs
+      WHERE target_id = ${r.id} AND action = 'reservation.confirmed'`;
+    expect(confirmed[0].n).toBe(1);
+    // With `stripe listen` running, the webhook arrives too and is a no-op.
+    await page.waitForTimeout(5_000);
+    const again = await sql`
+      SELECT count(*)::int AS n FROM audit_logs
+      WHERE target_id = ${r.id} AND action = 'reservation.confirmed'`;
+    expect(again[0].n).toBe(1);
+  } finally {
+    await sql.end();
+  }
+});

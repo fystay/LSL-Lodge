@@ -15,7 +15,7 @@ enabled and no real emails are sent.
 | Styling          | **Tailwind CSS 4.3** + small owned components (`src/components`)                           | Design tokens live in one `@theme` block. No heavy template to fight.                                                                                                                                                                                                |
 | Database         | **PostgreSQL 16 via Supabase** (proposed, UK/EU region)                                    | Managed Postgres with backups/PITR, plus Supabase Auth (MFA) for the admin area, all from one vendor a small business can administer. Supports `btree_gist` for exclusion constraints. Neon remains a drop-in alternative because the app only needs a Postgres URL. |
 | ORM / migrations | **Drizzle ORM 0.45 + drizzle-kit**                                                         | SQL-first, light, committed SQL migrations; hand-written migrations for what an ORM can't express (exclusion constraints, triggers).                                                                                                                                 |
-| Admin auth       | **Supabase Auth** with TOTP MFA and an email allowlist (Phase 2)                           | Proven managed auth; every server action re-checks the session and role.                                                                                                                                                                                             |
+| Admin auth       | **App-managed accounts** with password + TOTP, server-side sessions, roles                 | Built on Node crypto only, independent of any provider (no Supabase project exists yet). Every page and action re-checks the session and role. See SECURITY.md.                                                                                                      |
 | Payments         | **Stripe Checkout** (hosted), server-created sessions                                      | Smallest PCI scope; SCA is handled by Stripe.                                                                                                                                                                                                                        |
 | Calendar         | Google Calendar API (OAuth 2.0) + iCal import/export for Airbnb                            | See section 4 and [INTEGRATIONS.md](INTEGRATIONS.md).                                                                                                                                                                                                                |
 | Email            | **Resend or Postmark**, behind `EmailSender` (`src/server/notifications/email.ts`)         | Owner to choose; the interface makes the swap cheap.                                                                                                                                                                                                                 |
@@ -119,8 +119,14 @@ guest request ──► REQUESTED ──owner approves──► APPROVED ──v
 8. Expired requests and approvals are swept by `/api/jobs/expire-holds`,
    which also expires their open Checkout Sessions. Deadlines are also
    enforced at request time, so a missed run never double-books.
-9. Refunds, cancellations and balance payments: not built yet; they depend on
-   the owner's cancellation policy (section 7).
+9. Cancellations and refunds: the owner cancels from admin (dates freed,
+   open payment sessions closed, "refund decision needed" flagged if money
+   was paid) and chooses any refund amount, issued through Stripe and
+   tracked by `refund.*` webhooks; a cancelled booking moves to
+   REFUND_PENDING and REFUNDED when everything paid is returned. Guests can
+   withdraw unpaid requests or ask to cancel a paid booking. Nothing is
+   calculated from a policy until one is approved. Balance payments
+   (deposit plans) are not built.
 
 ## 4. Calendar sync design (Google and Airbnb)
 
@@ -215,24 +221,26 @@ scans) with the booking engine on; 64 with it off.
 - Resend account and verified sending domain.
 - Google Cloud project and OAuth consent screen for Google Calendar.
 
-**Engineering still to do**
+**Engineering still to do** (status in docs/LAUNCH-READINESS.md)
 
-- **Managed admin login with MFA** (Supabase Auth adapter). Until then admin
-  works only locally (`ADMIN_AUTH_MODE=local` is refused on Vercel).
-- **Cancellation and refunds** (owner and guest), including the refund for a
-  "refund required" late payment, once the policy is approved. Today the
-  owner refunds in the Stripe dashboard and the review reason records why.
-- **Resolving review cases in admin** (confirm a reviewed paid booking, or
-  record a refund). The state machine and checks exist; the UI doesn't yet.
-- **Balance payments** for deposit plans (not needed for full payment).
-- **Google Calendar** OAuth, free/busy import and app-calendar export.
-- **Scheduler**: the three job routes need a scheduler (Vercel Cron needs
-  the Pro plan for 5–15 minute polling, or Supabase `pg_cron`). Not
-  configured: that is a deployment change needing approval.
-- **Stripe reconciliation job**, monitoring (Sentry), backups and restore
-  test, runbooks.
-- Public pages still read facts from `src/content/property.ts`, not the
-  database settings.
+- Admin sign-in: done (docs/SECURITY.md). Passkeys and in-dashboard user
+  management not built.
+- Cancellations and refunds: policy-independent foundations done (owner
+  cancels; owner chooses refund amounts, issued through Stripe and tracked
+  by webhooks; confirm-after-review; mark-as-handled; guest withdraw or
+  request-to-cancel). Wiring amounts and deadlines to an approved policy is
+  not done.
+- Background jobs: done (docs/SCHEDULER.md); a scheduler and an uptime
+  monitor still need configuring.
+- Supabase: RLS and a guarded migrate/verify script done
+  (docs/SUPABASE-DEV-SETUP.md); no dedicated project yet.
+- Stripe sandbox run: plan and opt-in spec ready (docs/STRIPE-SANDBOX-TEST.md),
+  not run.
+- Google Calendar: assessed (docs/GOOGLE-CALENDAR.md), not built.
+- Balance payments for deposit plans (not needed for full payment).
+- Stripe reconciliation job, error monitoring, retention/purge job,
+  backups and restore test, runbooks.
+- Public pages still read facts from `src/content/property.ts`.
 
 ## 8. Booking modes and payment ordering
 

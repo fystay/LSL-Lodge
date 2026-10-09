@@ -20,7 +20,7 @@ import { getBookingContext } from "@/server/booking/public";
 import { applyCheckoutSession } from "@/server/payments/checkout";
 import { getPaymentGateway } from "@/server/payments/gateway";
 import type { Quote } from "@/server/pricing/quote";
-import { startPaymentAction } from "../actions";
+import { guestCancelAction, startPaymentAction } from "../actions";
 import { bookingCookieName } from "../cookie";
 import { StatusRefresher } from "./refresher";
 
@@ -45,6 +45,14 @@ export default function BookingStatusPage({
     </>
   );
 }
+
+const CANCEL_NOTICES: Record<string, string> = {
+  withdrawn: "Your request has been withdrawn. Nothing was charged.",
+  requested:
+    "We’ve told the owner you’d like to cancel. Your booking stands until they reply.",
+  unconfirmed: "Tick the box to confirm.",
+  error: "That couldn’t be done right now. Please contact the owner.",
+};
 
 const PAYMENT_NOTICES: Record<string, string> = {
   cancelled:
@@ -75,6 +83,8 @@ async function BookingStatus({
 
   const paymentStatus =
     typeof query.payment === "string" ? query.payment : undefined;
+  const cancelStatus =
+    typeof query.cancel === "string" ? query.cancel : undefined;
   const sessionId =
     typeof query.session_id === "string" ? query.session_id : undefined;
   let paymentRows = await ctx.db
@@ -157,6 +167,15 @@ async function BookingStatus({
           Booking reference {reservation.publicRef}
         </h2>
 
+        {cancelStatus && CANCEL_NOTICES[cancelStatus] && (
+          <p
+            role="alert"
+            className="rounded-soft border border-sage-300 bg-sage-100 p-4"
+          >
+            {CANCEL_NOTICES[cancelStatus]}
+          </p>
+        )}
+
         {paymentStatus && PAYMENT_NOTICES[paymentStatus] && (
           <p
             role="alert"
@@ -224,6 +243,48 @@ async function BookingStatus({
               can be charged.
             </p>
           ))}
+
+        {(status === "AWAITING_APPROVAL" ||
+          status === "APPROVED_AWAITING_PAYMENT" ||
+          ((status === "CONFIRMED" || status === "CONFIRMED_BALANCE_DUE") &&
+            !reservation.cancellationRequestedAt)) && (
+          <details className="rounded-soft border border-sage-300 p-4">
+            <summary className="cursor-pointer font-semibold">
+              {status === "CONFIRMED" || status === "CONFIRMED_BALANCE_DUE"
+                ? "Need to cancel?"
+                : "Withdraw this request"}
+            </summary>
+            <form action={guestCancelAction} className="mt-3 space-y-3">
+              <input type="hidden" name="ref" value={reservation.publicRef} />
+              <p className="text-sm">
+                {status === "CONFIRMED" || status === "CONFIRMED_BALANCE_DUE"
+                  ? "This sends a cancellation request to the owner. Your booking stays in place until they reply, under the cancellation policy."
+                  : "Nothing has been charged. Withdrawing releases the dates straight away."}
+              </p>
+              <label className="flex min-h-11 items-center gap-3">
+                <input
+                  type="checkbox"
+                  name="confirm"
+                  value="yes"
+                  className="size-5"
+                />
+                <span>
+                  {status === "CONFIRMED" || status === "CONFIRMED_BALANCE_DUE"
+                    ? "Yes, ask the owner to cancel"
+                    : "Yes, withdraw my request"}
+                </span>
+              </label>
+              <button
+                type="submit"
+                className="min-h-11 rounded-soft border border-pine-800 px-4 text-sm font-semibold text-pine-900 hover:bg-sage-100"
+              >
+                {status === "CONFIRMED" || status === "CONFIRMED_BALANCE_DUE"
+                  ? "Send cancellation request"
+                  : "Withdraw request"}
+              </button>
+            </form>
+          </details>
+        )}
 
         <p className="text-sm text-ink-muted">
           Keep this page&rsquo;s address and our emails private: they give

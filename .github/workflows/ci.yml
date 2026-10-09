@@ -94,14 +94,12 @@ jobs:
           DATABASE_URL: postgres://lodge:lodge@localhost:5432/lodge_e2e
           E2E_BOOKING: "true"
           BOOKING_PREVIEW: "true"
-          ADMIN_AUTH_MODE: local
-          ADMIN_EMAILS: owner@example.test
           # Every E2E test shares one client address; scale limits up (not off).
           RATE_LIMIT_SCALE: "50"
         run: |
-          # Throwaway credentials for this CI run only.
-          export ADMIN_LOCAL_PASSWORD="$(openssl rand -hex 16)"
-          export ADMIN_SESSION_SECRET="$(openssl rand -hex 32)"
+          # Throwaway key for this CI run only (admin TOTP secrets are encrypted).
+          export CREDENTIALS_ENCRYPTION_KEY="$(openssl rand -base64 32)"
+          export CREDENTIALS_ENCRYPTION_KEY_VERSION=1
           pnpm test:e2e
       - uses: actions/upload-artifact@v4
         if: failure()
