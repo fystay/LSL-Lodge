@@ -233,6 +233,7 @@ export async function syncCalendarSourceAction(form: FormData) {
   if (!owned) back("/admin/calendars", { error: "Unknown calendar." });
   const result = await syncIcalSource(ctx.db, id, {
     confirmHeldRemovals: release,
+    actor: ctx.admin.email,
   });
   back(
     "/admin/calendars",

@@ -337,6 +337,100 @@ describe("applyCheckoutSession", () => {
     expect((await load(reservationId)).reviewReason).toBe("CALENDAR_CONFLICT");
   });
 
+  it("keeps a confirmed booking confirmed when a second payment arrives, and flags a refund", async () => {
+    const { reservationId } = await approvedRequest();
+    const gateway = new FakeGateway();
+    await startCheckout(db, gateway, {
+      reservationId,
+      baseUrl: BASE,
+      now: NOW,
+    });
+    const first = gateway.latest();
+    // A second session for the same booking (e.g. two tabs), both paid.
+    await db
+      .update(payments)
+      .set({ checkoutExpiresAt: NOW })
+      .where(eq(payments.stripeCheckoutSessionId, first.id));
+    await startCheckout(db, gateway, {
+      reservationId,
+      baseUrl: BASE,
+      now: NOW,
+    });
+    const second = gateway.latest();
+    expect(second.id).not.toBe(first.id);
+
+    expect(await applyCheckoutSession(db, gateway.pay(first.id), NOW)).toBe(
+      "CONFIRMED",
+    );
+    expect(await applyCheckoutSession(db, gateway.pay(second.id), NOW)).toBe(
+      "REFUND_REQUIRED",
+    );
+    const r = await load(reservationId);
+    expect(r.status).toBe("CONFIRMED");
+    expect(r.reviewReason).toBe("DUPLICATE_PAYMENT_REFUND_REQUIRED");
+    const rows = await paymentRows(reservationId);
+    expect(rows.filter((p) => p.status === "SUCCEEDED")).toHaveLength(2);
+    expect(
+      rows.find((p) => p.stripeCheckoutSessionId === second.id)?.failureCode,
+    ).toBe("DUPLICATE_PAYMENT_REFUND_REQUIRED");
+  });
+
+  it("still applies a paid session whose ID wasn't saved", async () => {
+    const { reservationId } = await approvedRequest();
+    const gateway = new FakeGateway();
+    await startCheckout(db, gateway, {
+      reservationId,
+      baseUrl: BASE,
+      now: NOW,
+    });
+    await db
+      .update(payments)
+      .set({ stripeCheckoutSessionId: null })
+      .where(eq(payments.reservationId, reservationId));
+    expect(
+      await applyCheckoutSession(db, gateway.pay(gateway.latest().id), NOW),
+    ).toBe("CONFIRMED");
+    expect((await paymentRows(reservationId))[0].stripeCheckoutSessionId).toBe(
+      gateway.latest().id,
+    );
+  });
+
+  it("alerts the owner once per problem payment, not once per booking", async () => {
+    const { reservationId } = await approvedRequest();
+    const gateway = new FakeGateway();
+    await startCheckout(db, gateway, {
+      reservationId,
+      baseUrl: BASE,
+      now: NOW,
+    });
+    const first = gateway.latest();
+    await db
+      .update(payments)
+      .set({ checkoutExpiresAt: NOW })
+      .where(eq(payments.stripeCheckoutSessionId, first.id));
+    await startCheckout(db, gateway, {
+      reservationId,
+      baseUrl: BASE,
+      now: NOW,
+    });
+    const second = gateway.latest();
+    await applyCheckoutSession(
+      db,
+      gateway.pay(first.id, { amountTotal: 1 }),
+      NOW,
+    );
+    await applyCheckoutSession(
+      db,
+      gateway.pay(second.id, { amountTotal: 1 }),
+      NOW,
+    );
+    expect(
+      (await templates(reservationId)).filter(
+        (t) => t === "owner_payment_needs_review",
+      ),
+    ).toHaveLength(2);
+  });
+
   it("marks an expired session's payment cancelled and keeps the request approved", async () => {
     const { reservationId } = await approvedRequest();
     const gateway = new FakeGateway();

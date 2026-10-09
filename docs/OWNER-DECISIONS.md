@@ -18,7 +18,7 @@ Facts gathered so far, with sources: [property-facts-and-policies.md](property-f
 ## Blocking test-mode payments and email (accounts)
 
 - [ ] **Supabase project for the Lodge.** The connected Supabase account has
-      two projects ("fystay-preview" and "fystay@hotmail.com's Project"), both
+      two projects (one named "fystay-preview", one with a personal default name), both
       holding another application's tables and data. We did not touch them.
       Please create a dedicated project (EU/UK region), or confirm one may be
       used. Pricing tier and backups (PITR) to confirm.

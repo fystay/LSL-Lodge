@@ -10,7 +10,10 @@ import {
   reservations,
 } from "@/server/db/schema";
 import { conflictingBlocks, loadBlocks } from "@/server/booking/availability";
-import { enqueueForReservation } from "@/server/notifications/outbox";
+import {
+  enqueueForReservation,
+  enqueueNotification,
+} from "@/server/notifications/outbox";
 import type { CheckoutSessionSnapshot, PaymentGateway } from "./gateway";
 
 /**
@@ -244,19 +247,29 @@ export async function applyCheckoutSession(
       return "UNKNOWN_SESSION";
     const r = await lockForPayment(tx, reservationId);
     if (!r) return "UNKNOWN_SESSION";
+    // Matched by our own payment ID (set when the session was created); the
+    // stored session ID must agree if it was recorded. Both must belong to
+    // this reservation, so a session can't be applied to another booking.
+    const paymentId = session.metadata.payment_id;
+    if (!paymentId || !/^[0-9a-f-]{36}$/i.test(paymentId))
+      return "UNKNOWN_SESSION";
     const [payment] = await tx
       .select()
       .from(payments)
-      .where(
-        and(
-          eq(payments.stripeCheckoutSessionId, session.id),
-          eq(payments.reservationId, r.id),
-        ),
-      )
+      .where(and(eq(payments.id, paymentId), eq(payments.reservationId, r.id)))
       .for("update");
-    // Also guards against a session created for a different reservation.
-    if (!payment || session.metadata.payment_id !== payment.id)
+    if (
+      !payment ||
+      (payment.stripeCheckoutSessionId !== null &&
+        payment.stripeCheckoutSessionId !== session.id)
+    )
       return "UNKNOWN_SESSION";
+    if (payment.stripeCheckoutSessionId === null)
+      // The session was created but its ID wasn't saved (e.g. a crash).
+      await tx
+        .update(payments)
+        .set({ stripeCheckoutSessionId: session.id })
+        .where(eq(payments.id, payment.id));
     if (payment.status === "SUCCEEDED") return "ALREADY_APPLIED";
 
     if (session.status === "expired") {
@@ -303,7 +316,8 @@ export async function applyCheckoutSession(
       },
     });
 
-    if (!amountMatches) return review(tx, r, "AMOUNT_MISMATCH", "MISMATCH");
+    if (!amountMatches)
+      return review(tx, r, payment.id, "AMOUNT_MISMATCH", "MISMATCH");
 
     if (payment.scheduleItemId) {
       await tx
@@ -318,14 +332,15 @@ export async function applyCheckoutSession(
     // Still APPROVED (or an instant hold) means nobody else can hold these
     // dates: any new booking must first expire this row, under the same lock.
     if (r.status === "CONFIRMED" || r.status === "PAYMENT_DUE")
-      return review(tx, r, "DUPLICATE_PAYMENT", "NEEDS_REVIEW");
+      // The booking stands; only this extra payment needs refunding.
+      return flagRefund(tx, r, payment.id, "DUPLICATE_PAYMENT");
     if (!(PAYABLE as readonly string[]).includes(r.status))
       // Late payment on an expired or cancelled reservation.
-      return review(tx, r, "PAYMENT_AFTER_EXPIRY", "NEEDS_REVIEW");
+      return review(tx, r, payment.id, "PAYMENT_AFTER_EXPIRY", "NEEDS_REVIEW");
     if (r.status === "APPROVED" && !r.approvedAt)
-      return review(tx, r, "NOT_APPROVED", "NEEDS_REVIEW");
+      return review(tx, r, payment.id, "NOT_APPROVED", "NEEDS_REVIEW");
     if (await hasExternalConflict(tx, r, now))
-      return review(tx, r, "CALENDAR_CONFLICT", "NEEDS_REVIEW");
+      return review(tx, r, payment.id, "CALENDAR_CONFLICT", "NEEDS_REVIEW");
 
     const outstanding = await tx
       .select({ id: paymentScheduleItems.id })
@@ -467,10 +482,10 @@ async function hasExternalConflict(
 async function review(
   tx: Transaction,
   r: ReservationRow,
+  paymentId: string,
   reason: string,
   outcome: ApplyOutcome,
 ): Promise<ApplyOutcome> {
-  let result = outcome;
   try {
     await tx.transaction(async (sp) => {
       await sp
@@ -480,26 +495,57 @@ async function review(
     });
   } catch (error) {
     if (pgCode(error) !== "23P01" && pgCode(error) !== "23514") throw error;
-    // Dates re-sold (exclusion) or no legal path (e.g. DECLINED is terminal).
-    await tx
-      .update(reservations)
-      .set({ reviewReason: `${reason}_REFUND_REQUIRED` })
-      .where(eq(reservations.id, r.id));
-    result = "REFUND_REQUIRED";
+    // Dates re-sold (exclusion) or no legal path (e.g. CANCELLED).
+    return flagRefund(tx, r, paymentId, reason);
   }
   await tx.insert(auditLogs).values({
     actorType: "WEBHOOK",
-    action:
-      result === "REFUND_REQUIRED"
-        ? "payment.refund_required"
-        : "reservation.requires_review",
+    action: "reservation.requires_review",
     targetType: "reservation",
     targetId: r.id,
-    metadata: { reason, previousStatus: r.status },
+    metadata: { reason, paymentId, previousStatus: r.status },
   });
-  await enqueueForReservation(tx, r.id, ["owner_payment_needs_review"]);
-  return result;
+  await alertOwner(tx, r.id, paymentId);
+  return outcome;
 }
+
+/** Leaves the reservation's status alone and flags the payment for refund. */
+async function flagRefund(
+  tx: Transaction,
+  r: ReservationRow,
+  paymentId: string,
+  reason: string,
+): Promise<ApplyOutcome> {
+  await tx
+    .update(reservations)
+    .set({ reviewReason: `${reason}_REFUND_REQUIRED` })
+    .where(eq(reservations.id, r.id));
+  await tx
+    .update(payments)
+    .set({ failureCode: `${reason}_REFUND_REQUIRED` })
+    .where(eq(payments.id, paymentId));
+  await tx.insert(auditLogs).values({
+    actorType: "WEBHOOK",
+    action: "payment.refund_required",
+    targetType: "reservation",
+    targetId: r.id,
+    metadata: { reason, paymentId, status: r.status },
+  });
+  await alertOwner(tx, r.id, paymentId);
+  return "REFUND_REQUIRED";
+}
+
+/** One alert per payment, so a second problem on the same booking still alerts. */
+const alertOwner = (
+  tx: Transaction,
+  reservationId: string,
+  paymentId: string,
+) =>
+  enqueueNotification(tx, {
+    template: "owner_payment_needs_review",
+    reservationId,
+    idempotencyKey: `owner_payment_needs_review:${paymentId}`,
+  });
 
 function pgCode(error: unknown): string | undefined {
   let current: unknown = error;

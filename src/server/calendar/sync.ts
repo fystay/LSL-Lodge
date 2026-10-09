@@ -141,6 +141,8 @@ export async function syncIcalSource(
     keys?: CredentialKey[];
     /** Apply removals that were held because the feed emptied. Owner-confirmed only. */
     confirmHeldRemovals?: boolean;
+    /** Admin email, recorded when the owner confirms held removals. */
+    actor?: string;
   } = {},
 ): Promise<SyncOutcome> {
   const now = options.now ?? new Date();
@@ -313,6 +315,7 @@ export async function syncIcalSource(
     if (removals.length > 0 && options.confirmHeldRemovals)
       await tx.insert(auditLogs).values({
         actorType: "OWNER",
+        actorId: options.actor ?? null,
         action: "calendar_source.held_removals_released",
         targetType: "external_calendar_source",
         targetId: source.id,

@@ -2,7 +2,7 @@ import "server-only";
 import { and, eq, sql } from "drizzle-orm";
 import type Stripe from "stripe";
 import type { Database } from "@/server/db/client";
-import { webhookEvents } from "@/server/db/schema";
+import { auditLogs, webhookEvents } from "@/server/db/schema";
 import {
   applyCheckoutSession,
   markCheckoutFailed,
@@ -85,6 +85,20 @@ export async function processStripeEvent(
         event.type === "checkout.session.async_payment_failed"
           ? (await markCheckoutFailed(tx, session.id), "FAILED_MARKED" as const)
           : await applyCheckoutSession(tx, snapshotFromStripe(session), now);
+      if (outcome === "UNKNOWN_SESSION" && session.payment_status === "paid") {
+        // Money we can't tie to a booking: never drop it quietly.
+        await tx.insert(auditLogs).values({
+          actorType: "WEBHOOK",
+          action: "payment.unmatched_session",
+          targetType: "stripe_checkout_session",
+          targetId: session.id,
+          metadata: { eventId: event.id },
+        });
+        console.error("stripe.unmatched_paid_session", {
+          eventId: event.id,
+          sessionId: session.id,
+        });
+      }
       await finish("PROCESSED");
       return { handled: "applied", type: event.type, outcome } as const;
     });
