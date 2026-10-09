@@ -6,6 +6,13 @@ import {
   type EnquiryState,
 } from "@/server/contact/enquiry";
 import { randomUUID } from "node:crypto";
+import { headers } from "next/headers";
+import { db, isDatabaseConfigured } from "@/server/db/client";
+import {
+  clientIp,
+  consumeRateLimit,
+  LIMITS,
+} from "@/server/security/rate-limit";
 import {
   getEmailSender,
   ownerNotificationAddress,
@@ -34,6 +41,16 @@ export async function submitEnquiry(
     }
     return { status: "invalid", errors, values };
   }
+
+  if (
+    isDatabaseConfigured() &&
+    !(await consumeRateLimit(
+      db(),
+      LIMITS.enquiryPerIp,
+      clientIp(await headers()),
+    ))
+  )
+    return { status: "error", values };
 
   const sender = getEmailSender();
   const ownerAddress = ownerNotificationAddress();

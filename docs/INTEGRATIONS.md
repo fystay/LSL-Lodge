@@ -67,8 +67,74 @@ guarantees, cost, permissions, cancellation behaviour, test environment and
 failure modes. It is integrated behind a provider adapter so the booking
 domain doesn't depend on one vendor. No provider has been chosen.
 
+## Airbnb: what is implemented
+
+- **Import** (`src/server/calendar/sync.ts`, `/admin/calendars`,
+  `/api/jobs/sync-calendars`): the owner pastes the Airbnb export link in
+  admin. It must be an `https` (or `webcal`) link on airbnb.com or
+  airbnb.co.uk, and is stored only encrypted. The job polls due sources with
+  ETag/Last-Modified, then schedules the next poll at a quarter of the stale
+  window (15 minutes by default), with exponential backoff (up to 6 hours)
+  after failures. "Sync now" runs it immediately.
+- **Health**: working / failing / out of date (no success within 60 minutes),
+  last success, last attempt, imported period count, failure count and a
+  plain-language error. After 3 consecutive failures the owner gets one alert
+  per outage. Guests see a short "running behind" note on the availability
+  page while any import is failing or stale; the owner's approval step is
+  the safety net.
+- **Export** (`/calendar/<token>.ics`): website bookings, live requests and
+  owner blocks as "Not available". Imported periods are never exported, so
+  Airbnb and the site can't echo each other. The token is an HMAC under
+  `CALENDAR_EXPORT_SECRET`; changing the secret revokes the link.
+
+### Race windows that remain (iCal cannot close them)
+
+| Window                                                                           | What protects it                                                                                                   |
+| -------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------ |
+| An Airbnb booking exists, but its export hasn't updated or we haven't polled yet | The owner reviews every request; approval and payment both re-check imported periods. Stale sync is shown to both. |
+| A website request is held, but Airbnb hasn't read our export yet                 | Requests are exported immediately; Airbnb's read delay is outside our control.                                     |
+| Airbnb booking imported after a website booking was paid                         | Listed under "Clashes to resolve" and alerted. Neither record changes; the owner contacts a guest.                 |
+| Airbnb's feed empties by mistake                                                 | Removals are held until the owner confirms them.                                                                   |
+
 ## Stripe
 
-Hosted Checkout, server-created sessions, webhook-driven state. Details are in
-docs/PLAN.md §3. Test mode only; `sk_live_` keys are refused unless
-`STRIPE_LIVE_MODE_APPROVED=true`.
+Hosted Checkout, server-created sessions, webhook-driven state. Test mode
+only; `sk_live_` keys are refused unless `STRIPE_LIVE_MODE_APPROVED=true`.
+Lifecycle: docs/PLAN.md §3.
+
+- **Events handled** at `/api/webhooks/stripe`:
+  `checkout.session.completed`, `checkout.session.async_payment_succeeded`,
+  `checkout.session.async_payment_failed`, `checkout.session.expired`. Others
+  are acknowledged and recorded as ignored.
+- **Payment methods**: `allowed_payment_method_types: ["card"]` (wallets are
+  card payments), so a payment can't still be settling when the dates' hold
+  ends. Asynchronous events are still handled defensively.
+- **Session expiry**: never later than the reservation's hold. Stripe needs at
+  least 30 minutes, so a payment started near the deadline extends the hold
+  to cover the session (by at most about 30 minutes).
+- **Return page**: re-fetches the session from Stripe server-side; the
+  redirect itself proves nothing. The webhook settles it independently.
+
+### Testing webhooks locally (test mode)
+
+1. Put test keys in `.env.local`: `STRIPE_SECRET_KEY=sk_test_…`.
+2. Install the Stripe CLI and run
+   `stripe listen --forward-to localhost:3000/api/webhooks/stripe`. Copy the
+   `whsec_…` it prints into `STRIPE_WEBHOOK_SECRET`.
+3. Start the app with the booking preview (see README), send a request,
+   approve it in `/admin`, then pay with the test card `4242 4242 4242 4242`.
+4. `stripe trigger checkout.session.completed` sends synthetic events, which
+   are recorded and, lacking a matching payment, safely ignored.
+
+No test-mode keys were available while building this, so the Stripe adapter
+has been exercised against signed synthetic events and an in-memory gateway
+(`tests/support/fake-gateway.ts`), not yet against Stripe's sandbox.
+
+## Email (Resend)
+
+`EMAIL_DELIVERY` is `off` by default: messages are recorded as "not sent" and
+can be previewed in admin. `resend-sandbox` sends everything to Resend's test
+inbox (`delivered@resend.dev`). `resend` sends to real guests and also needs
+`EMAIL_LIVE_DELIVERY_APPROVED=true`, a verified sending domain (SPF, DKIM,
+DMARC) and the owner's approval. Requests use Resend's `Idempotency-Key`
+header, so a retried job can't send twice. Not yet exercised against Resend.

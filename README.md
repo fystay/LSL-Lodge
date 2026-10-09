@@ -3,16 +3,25 @@
 Direct-booking website for Lodge on the Lake, a lakeside lodge at South
 Lakeland Leisure Village. It runs alongside the existing Airbnb listing.
 
-**Status:** Phases 0–2 (foundation, public site, booking engine and admin).
-Pre-launch preview only: no payments or emails are live, the booking flow is
-off unless explicitly enabled outside production, and the site is `noindex`.
-Property content awaits owner confirmation. See docs/PLAN.md §7 for what is
-still open.
+**Status:** pre-launch. Built: public site, booking engine, host-approval
+requests, owner dashboard, test-mode Stripe Checkout, email notifications
+(off by default) and Airbnb iCal sync. No payments or emails are live, the
+booking flow is off unless explicitly enabled outside production, and the
+site is `noindex`. Property facts, prices and policies await the owner. See
+docs/PLAN.md §7 for what is still open and
+[docs/LAUNCH-READINESS.md](docs/LAUNCH-READINESS.md) for the launch
+checklist.
+
+How booking works: the guest sends a request (nothing charged, dates held)
+→ the owner approves or declines in `/admin` → an approved guest pays the
+full amount on Stripe → the booking confirms only when payment is verified.
 
 - Project charter: [CLAUDE.md](CLAUDE.md)
 - Plan, data model, payment and sync design: [docs/PLAN.md](docs/PLAN.md)
 - Integration limits (Airbnb iCal, Google, Stripe): [docs/INTEGRATIONS.md](docs/INTEGRATIONS.md)
 - Owner inputs needed: [docs/OWNER-DECISIONS.md](docs/OWNER-DECISIONS.md)
+- Property facts and their sources: [docs/property-facts-and-policies.md](docs/property-facts-and-policies.md)
+- Launch checklist: [docs/LAUNCH-READINESS.md](docs/LAUNCH-READINESS.md)
 - Content and photography: [docs/CONTENT.md](docs/CONTENT.md)
 - Security notes: [docs/SECURITY.md](docs/SECURITY.md)
 
@@ -70,8 +79,32 @@ pnpm dev                    # /availability for guests, /admin for the owner
 The seed's prices are made up. Real rates are entered by the owner in
 `/admin/pricing`. Local admin sign-in is refused on any Vercel deployment.
 
+To try the full journey: request dates at `/availability`, approve the
+request from the `/admin` overview, then return to the booking page (same
+browser). Without Stripe keys the page says payment isn't switched on. To pay
+in test mode, add `STRIPE_SECRET_KEY=sk_test_…` and run `stripe listen` (see
+docs/INTEGRATIONS.md). Messages are recorded as "not sent" and can be
+previewed on the booking's admin page. Optional extras: `GUEST_LINK_SECRET`
+(links in emails), `CALENDAR_EXPORT_SECRET` (export feed) and
+`CREDENTIALS_ENCRYPTION_KEY` (needed to add an Airbnb link).
+
+### Scheduled jobs
+
+Each needs `Authorization: Bearer $CRON_SECRET` (32+ characters). No
+scheduler is configured yet (owner decision: Vercel Pro cron or Supabase
+`pg_cron`).
+
+| Endpoint                       | Suggested interval | Does                                                                 |
+| ------------------------------ | ------------------ | -------------------------------------------------------------------- |
+| `/api/jobs/expire-holds`       | 5 minutes          | Expires lapsed requests/approvals, closes their Stripe sessions      |
+| `/api/jobs/send-notifications` | 1–5 minutes        | Delivers queued emails (or marks them not sent when delivery is off) |
+| `/api/jobs/sync-calendars`     | 5 minutes          | Polls imported iCal feeds that are due                               |
+
+Stripe calls `/api/webhooks/stripe` (signature-verified).
+
 To run the booking and admin E2E tests too:
-`E2E_BOOKING=true` plus the variables above, then `pnpm build && pnpm test:e2e`.
+`E2E_BOOKING=true` and `RATE_LIMIT_SCALE=50` plus the variables above, then
+`pnpm build && pnpm test:e2e`.
 
 ## Scripts
 
@@ -101,14 +134,15 @@ src/
   lib/                 Shared, framework-free logic: dates, time zones, search validation
   server/              Server-only domain code
     admin/             Admin auth, validation schemas, queries and audited mutations
-    booking/           State machine, availability, transactional holds
+    booking/           State machine, availability, requests/holds, owner decisions, guest links
     jobs/              Scheduler authentication
-    calendar/          iCal parsing, SSRF-safe fetch, import reconciliation
+    calendar/          iCal parsing, SSRF-safe fetch, import sync, export feed
     contact/           Enquiry validation
     crypto/            Credential encryption
     db/                Drizzle schema and client
-    notifications/     Email abstraction
-    payments/          Stripe webhook verification
+    notifications/     Outbox, templates, Resend adapter, dispatcher
+    payments/          Checkout gateway, payment lifecycle, webhook processing
+    security/          Rate limiting
     pricing/           Quote engine and rule loading
 drizzle/               Committed SQL migrations
 e2e/                   Playwright tests

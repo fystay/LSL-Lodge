@@ -1,62 +1,85 @@
 # Decisions and inputs needed from the owner
 
 Nothing here has been assumed. Until each item is confirmed, the site shows a
-clearly marked placeholder. **Never send passwords, API keys or private feed
-URLs by chat or email.** Enter secrets directly in the hosting provider's
-secret manager, or in the admin screen once it exists.
+clearly marked placeholder or refuses to act. **Never send passwords, API
+keys or private feed URLs by chat or email.** Enter secrets directly in the
+hosting provider's secret manager, or in the admin screen where one exists
+(the Airbnb link goes in `/admin/calendars`).
 
-## Blocking Phase 2 (booking and pricing)
+Facts gathered so far, with sources: [property-facts-and-policies.md](property-facts-and-policies.md).
 
-- [ ] **Hosting and database accounts.** Agree to Vercel (Pro needed for
-      frequent calendar polling) and Supabase (UK/EU region), or name
-      alternatives. Accounts should be owned by the business, with the
-      developer invited.
-- [ ] **Admin users.** Email addresses allowed into the admin area (MFA will
-      be required).
-- [ ] **Occupancy and rooms.** Maximum guests (brief says 6), bedrooms (3),
-      bathrooms (2), bed configuration.
-- [ ] **Check-in and check-out times**, turnover buffer (same-day turnover
-      allowed?), minimum stay (and whether it varies by season or arrival day).
-- [ ] **Rates.** Seasonal nightly rates, weekend rates, cleaning fee, extra
-      guest charges, discounts.
-- [ ] **Tax treatment.** Whether prices include VAT or any other tax. Take
-      advice from an accountant; nothing is assumed.
+## Already decided
 
-## Blocking Phase 3 (payments and email)
+- [x] **Booking mode: host approval.** Guests send a request; you approve or
+      decline; nothing is charged before approval. Instant booking is built
+      but switched off.
+- [x] **Payment model: full payment**, collected after approval.
 
-- [ ] **Payment plan.** Full payment, or deposit (percentage or fixed) with the
-      balance due N days before arrival; full payment if booking within N days.
-- [ ] **Cancellation and refund policy**, including no-shows and owner
-      cancellation. Have it legally reviewed.
+## Blocking test-mode payments and email (accounts)
+
+- [ ] **Supabase project for the Lodge.** The connected Supabase account has
+      two projects ("fystay-preview" and "fystay@hotmail.com's Project"), both
+      holding another application's tables and data. We did not touch them.
+      Please create a dedicated project (EU/UK region), or confirm one may be
+      used. Pricing tier and backups (PITR) to confirm.
+- [ ] **Stripe.** The connected Stripe login shows "FYStay" (live and test)
+      and "FYStay sandbox". Confirm which account the Lodge should use, then
+      put its **test** secret key and webhook signing secret in the hosting
+      secret manager. Live mode stays off until you approve it.
+- [ ] **Resend** (or another provider), a sending domain, and DNS access for
+      SPF, DKIM and DMARC. Real guest emails stay off until you approve them.
+- [ ] **Admin users**: email addresses allowed into admin (MFA will be
+      required once managed login is added).
+
+## Blocking real bookings (business rules)
+
+- [ ] **Rates**: seasonal nightly rates, weekend rates, cleaning fee, extra
+      guest charges, discounts. Entered in `/admin/pricing`.
+- [ ] **Tax treatment**: whether prices include VAT or any other tax (ask
+      your accountant). Currency assumed GBP: confirm.
+- [ ] **Minimum stay**, check-in and check-out times, turnover buffer.
+- [ ] **Response window**: how long you have to answer a request (default
+      24 hours; dates are held meanwhile).
+- [ ] **Payment window**: how long an approved guest has to pay (default 24
+      hours).
+- [ ] **Cancellation, refund, no-show and amendment policy**, including
+      owner cancellations and refund timing. Airbnb's policy is not assumed.
+      Legal review recommended.
 - [ ] **Booking terms** (legal review recommended).
-- [ ] **Stripe account** in the business's name. Test mode is used until you
-      explicitly approve live mode.
-- [ ] **Email provider** (Resend or Postmark), sending domain, and access to
-      DNS to set SPF, DKIM and DMARC.
-- [ ] **Guest data** to collect: name and email are the default; phone only if
-      you need it.
+- [ ] **Guest data**: name and email by default; phone optional. Anything
+      else (address, age of lead guest)?
+- [ ] **Late payments**: if a payment arrives after a booking lapsed, it is
+      flagged to you. Confirm your rule: honour the booking if the dates are
+      free, or always refund?
 
-## Blocking Phase 4 (calendars)
+## Blocking calendars
 
-- [ ] **Airbnb export URL.** Find it in Airbnb: Calendar → Availability →
-      Connect calendars → Export calendar. Enter it in admin; don't send it.
-- [ ] Confirm you can **import** an external calendar URL into the Airbnb
-      listing (for the website's export feed).
-- [ ] **Google account and calendars** to read busy times from; agree that the
-      site creates its own "bookings" calendar. A Google Cloud project with an
-      OAuth consent screen is needed (we can set it up together).
-- [ ] **Channel manager?** Is the iCal delay window (see INTEGRATIONS.md)
-      acceptable? If not, choose a budget for a channel manager with an
-      official Airbnb connection.
+- [ ] **Airbnb export link**: add it in `/admin/calendars` (Airbnb:
+      Calendar → Availability → Connect calendars → Export calendar).
+- [ ] Add the site's **export link** (shown in `/admin/calendars` once
+      `CALENDAR_EXPORT_SECRET` is set) to Airbnb's "Import calendar".
+- [ ] **Is the iCal delay acceptable?** Airbnb updates its feeds on its own
+      schedule (see INTEGRATIONS.md). Your approval step is a safety net. If
+      the delay is not acceptable, choose a budget for a channel manager with
+      an official Airbnb connection.
+- [ ] **Google Calendar**: which account and calendars to read busy times
+      from; agree the site creates its own "bookings" calendar. Needs a
+      Google Cloud project and OAuth consent screen. No calendar is written
+      until you approve.
+- [ ] **Scheduler**: Vercel Pro (for 5–15 minute polling) or Supabase
+      `pg_cron` to call the job endpoints.
 
 ## Blocking launch
 
+- [ ] Facts marked "Listing states", "Inferred" or "Unknown" in the facts
+      register, notably bed sizes (Airbnb says king; the site says double),
+      the "Waterfront" wording, two bathrooms, house rules, the full
+      amenities list and leisure-village rules.
 - [ ] Legal property/business name, address and contact details.
-- [ ] Amenities, accessibility information, pet and smoking policy, parking,
-      Wi-Fi, house rules, including any leisure-village rules.
-- [ ] Owner-approved photography (see CONTENT.md shot list).
+- [ ] Owner-approved photography (originals at higher resolution).
 - [ ] Location copy and your own local recommendations.
 - [ ] Privacy notice details (controller, retention periods) and legal review.
 - [ ] Domain name.
 - [ ] Monitoring and alerting contacts.
-- [ ] Final acceptance testing and **explicit launch approval**.
+- [ ] Final acceptance testing and **explicit launch approval**, including
+      live payments and real guest emails.

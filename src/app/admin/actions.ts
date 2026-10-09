@@ -1,7 +1,14 @@
 "use server";
 
 import type { Route } from "next";
+import { headers } from "next/headers";
 import { redirect } from "next/navigation";
+import { db, isDatabaseConfigured } from "@/server/db/client";
+import {
+  clientIp,
+  consumeRateLimit,
+  LIMITS,
+} from "@/server/security/rate-limit";
 import { createOwnerBlock, removeOwnerBlock } from "@/server/booking/holds";
 import { approveRequest, declineRequest } from "@/server/booking/requests";
 import { addIcalSource, syncIcalSource } from "@/server/calendar/sync";
@@ -56,6 +63,11 @@ const uuid = (value: FormDataEntryValue | null) => {
 // --- Session ----------------------------------------------------------------------
 
 export async function signInAction(form: FormData) {
+  if (isDatabaseConfigured()) {
+    const ip = clientIp(await headers());
+    if (!(await consumeRateLimit(db(), LIMITS.loginPerIp, ip)))
+      redirect("/admin/login?error=1");
+  }
   const ok = await signInLocal(
     String(form.get("email") ?? ""),
     String(form.get("password") ?? ""),

@@ -96,6 +96,8 @@ jobs:
           BOOKING_PREVIEW: "true"
           ADMIN_AUTH_MODE: local
           ADMIN_EMAILS: owner@example.test
+          # Every E2E test shares one client address; scale limits up (not off).
+          RATE_LIMIT_SCALE: "50"
         run: |
           # Throwaway credentials for this CI run only.
           export ADMIN_LOCAL_PASSWORD="$(openssl rand -hex 16)"

@@ -55,17 +55,54 @@
 - **Admin search** escapes `LIKE` wildcards; listings are capped at 50 rows.
 - **Seed script** refuses any non-local database host.
 
+### Added with the host-approval backend
+
+- **Rate limiting** (Postgres-backed, `src/server/security/rate-limit.ts`):
+  booking requests 5 per hour per client IP and 3 per day per guest email
+  (a request holds dates for up to a day and sends email, so this limits
+  both calendar-hogging and using the form to email strangers); payment
+  starts 10 per hour per booking; admin sign-in 10 per 15 minutes per IP;
+  enquiries 5 per hour per IP. Subjects are stored only as hashes and pruned
+  after two days. `RATE_LIMIT_SCALE` multiplies limits for E2E runs only.
+  Behind a proxy that doesn't set `X-Forwarded-For`, all clients share one
+  bucket (fails safe).
+- **Stripe webhook**: raw-body signature verification; event IDs recorded in
+  the same transaction as their effect (unique per provider, row-locked), so
+  duplicates and concurrent deliveries apply once; failures recorded with a
+  code and answered 500 so Stripe retries. Logs carry event ID and type only.
+- **Payment integrity**: amounts come from the stored schedule; a session is
+  applied only if it is recorded against the same reservation and payment
+  (metadata and `client_reference_id`), paid, and matches amount and
+  currency. Card data never reaches the site (Stripe-hosted Checkout). The
+  pay action redirects only to `https://checkout.stripe.com/`.
+- **Guest email links**: `g1.<expiry>.<HMAC>` over reference and ID under
+  `GUEST_LINK_SECRET`, valid 90 days, compared in constant time. The access
+  route moves the token into the booking's httpOnly cookie and redirects, so
+  it doesn't stay in the address bar. Admin previews redact it.
+- **Owner-only data**: owner notes, review reasons and guest contact details
+  are shown only in admin. Owner emails carry no guest contact details.
+- **Calendar export feed**: HMAC token compared in constant time; same 404
+  for disabled, unknown or wrong; "Not available" events only; `noindex`.
+- **Admin actions** added for approve/decline and calendar sync all call
+  `requireAdmin()` and are scoped to the property (a source or booking from
+  another property is "unknown").
+- **Instant booking, live Stripe and real email** each need their own
+  explicit environment approval flag (`INSTANT_BOOKING_APPROVED`,
+  `STRIPE_LIVE_MODE_APPROVED`, `EMAIL_LIVE_DELIVERY_APPROVED`).
+
 ## Required before accepting bookings
 
-- Rate limiting on booking, contact, login, payment and webhook endpoints
-  (e.g. Upstash/Vercel KV or a Postgres-backed limiter).
 - Managed admin auth with MFA (Supabase adapter) to replace local mode on
   deployed sites; re-authentication for sensitive actions. (Server-side checks
   on every route and action are already in place.)
-- CSRF: server actions are POST-only with Origin checks by Next.js; any custom
-  route handlers that change state must verify Origin too.
-- Webhook endpoint: raw-body signature verification (prototype done) and
-  idempotent persistence.
+- CSRF: server actions are POST-only with Origin checks by Next.js. The custom
+  route handlers are the Stripe webhook (signature-verified), the job routes
+  (bearer secret), the read-only export feed, and the email-link route, whose
+  only effect is setting a cookie scoped to the booking the link is valid for.
+- Run the payment flow end to end against a Stripe sandbox, and email
+  against Resend's sandbox, before launch (not yet possible: no keys).
+- Data retention: decide how long declined, expired and past bookings keep
+  guest names and emails, then add a purge job.
 - Error monitoring with PII scrubbing; structured logs with correlation IDs.
 - Backups: enable Supabase PITR; document and test restoration.
 - Dependency scanning (CI runs `pnpm audit --prod`; enable Dependabot).

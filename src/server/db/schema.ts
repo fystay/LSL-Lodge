@@ -681,3 +681,18 @@ export const auditLogs = pgTable(
     index("audit_logs_created_idx").on(t.createdAt),
   ],
 );
+
+/**
+ * Fixed-window rate-limit counters (src/server/security/rate-limit.ts).
+ * Keys hold a purpose and a hashed subject (never a raw IP or email).
+ * Old windows are deleted by the sweeper.
+ */
+export const rateLimits = pgTable(
+  "rate_limits",
+  {
+    key: text("key").primaryKey(),
+    windowStart: timestamp("window_start", { withTimezone: true }).notNull(),
+    count: integer("count").notNull(),
+  },
+  (t) => [index("rate_limits_window_idx").on(t.windowStart)],
+);

@@ -3,6 +3,7 @@ import { expireLapsedHolds } from "@/server/booking/holds";
 import { isAuthorisedJobRequest } from "@/server/jobs/auth";
 import { cancelOpenCheckouts } from "@/server/payments/checkout";
 import { getPaymentGateway } from "@/server/payments/gateway";
+import { pruneRateLimits } from "@/server/security/rate-limit";
 
 /**
  * Sweeps lapsed requests, approvals awaiting payment and instant holds, then
@@ -20,5 +21,6 @@ export async function GET(request: Request) {
   const database = db();
   const expired = await expireLapsedHolds(database, null, new Date());
   await cancelOpenCheckouts(database, getPaymentGateway(), expired);
+  await pruneRateLimits(database);
   return Response.json({ expired: expired.length });
 }

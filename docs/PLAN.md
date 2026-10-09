@@ -1,8 +1,11 @@
 # Implementation plan
 
-Status as of 8 October 2026. Phases 0, 1 and 2 are implemented in this repository
-(Phase 2 with the gaps listed in section 7).
-Nothing is deployed, no live payments are enabled and no real emails are sent.
+Status as of 9 October 2026. Phases 0–2 are implemented, plus the
+host-approval workflow, test-mode Stripe payments, email notifications
+(delivery off by default) and Airbnb iCal sync from the engineering brief.
+See section 7 for what is still open and docs/LAUNCH-READINESS.md for the
+launch checklist. Nothing is deployed to production, no live payments are
+enabled and no real emails are sent.
 
 ## 1. Stack and rationale
 
@@ -38,18 +41,25 @@ Key rules:
   table has a generated `stay daterange` column, bounds `[)`: check-in is
   inclusive and check-out exclusive, so same-day turnover works.
 - Money is integer pence plus an ISO currency code.
-- **A hold is a reservation in `PENDING_PAYMENT` with a required
-  `hold_expires_at`.** Holds and bookings share one table, so one constraint
-  covers both.
+- **Requests and holds are reservations.** `REQUESTED` (awaiting the owner),
+  `APPROVED` (awaiting payment) and `PENDING_PAYMENT` (instant mode) each
+  hold the dates until a required `hold_expires_at`. Holds and bookings share
+  one table, so one constraint covers both. Past its deadline a hold stops
+  blocking even before the sweeper marks it `EXPIRED`.
 - **Exclusion constraint** `reservations_no_overlapping_active_stays`:
   `EXCLUDE USING gist (property_id WITH =, stay WITH &&) WHERE status IN
-(PENDING_PAYMENT, CONFIRMED, PAYMENT_DUE, REQUIRES_REVIEW)`. Overlapping
-  active stays are impossible at the database layer, whatever the application
-  does.
+(REQUESTED, APPROVED, PENDING_PAYMENT, CONFIRMED, PAYMENT_DUE,
+REQUIRES_REVIEW)`. Overlapping active stays are impossible at the database
+  layer, whatever the application does.
 - **Triggers**: legal status transitions only (mirrors
   `src/server/booking/reservation-state.ts`); website reservations can only be
-  inserted as `PENDING_PAYMENT`; quote snapshot, total and currency are
-  immutable.
+  inserted as `REQUESTED` or `PENDING_PAYMENT`; an `APPROVED` row needs
+  `approved_at`; quote snapshot, total and currency are immutable.
+- **Migration note**: `drizzle/0002_host_approval_workflow.sql` replaces the
+  status enum type rather than adding values, because drizzle applies all
+  pending migrations in one transaction and PostgreSQL won't use a new enum
+  value in the transaction that added it. Tested on a fresh database and as
+  an upgrade with existing rows.
 - Owner blocks and imported external busy periods live in separate tables
   (external periods may legitimately overlap a direct booking, which is a
   _conflict to surface_, not a row to reject). Hold creation (Phase 2) runs in
@@ -63,46 +73,54 @@ Key rules:
   payment can't revive an expired hold whose dates were re-sold; the DB
   trigger matches the TypeScript state machine for all 56 status pairs.
 
-## 3. Stripe booking and payment lifecycle
+## 3. Booking and payment lifecycle (host approval, full payment)
+
+The owner chose **host approval** and **full payment**. Nothing is charged
+before the owner approves.
+
+```
+guest request ──► REQUESTED ──owner approves──► APPROVED ──verified payment──► CONFIRMED
+ (dates held,        │  (deadline: response      │  (deadline: payment
+  nothing charged)   │   window, default 24 h)   │   window, default 24 h)
+                     ├─owner declines──► DECLINED (dates released)
+                     └─no response────► EXPIRED  (dates released)
+                                             APPROVED ─not paid in time─► EXPIRED
+```
 
 1. Guest searches. The server validates dates, occupancy, minimum stay and
    horizon, then prices the stay from versioned rate and fee rules.
-2. The guest reviews the itemised quote, cancellation terms and payment
-   schedule (due now and later, with dates).
-3. The server creates the hold transactionally (with an idempotency key),
-   status `PENDING_PAYMENT`, expiry around 30 minutes, and stores the
-   immutable quote snapshot and schedule items.
-4. The server re-checks conflicts, then creates a Checkout Session
-   (mode `payment`) for the due-now amount, with a stable Stripe idempotency
-   key, `client_reference_id` = reservation ID and session `expires_at`
-   aligned with the hold.
-5. The redirect back shows "confirming…" only. **The verified webhook
-   decides.** `checkout.session.completed` /
-   `checkout.session.async_payment_succeeded` is processed only if:
-   signature valid (raw body), event ID not already processed (unique
-   `webhook_events` row, in the same transaction), amount, currency and
-   reservation match, and the reservation is still in a confirmable state.
-6. Transition: full payment goes to `CONFIRMED`; deposit goes to
-   `PAYMENT_DUE` (balance scheduled).
-7. **Payment succeeded but hold expired or dates conflicted:** the move to
-   `REQUIRES_REVIEW` is attempted. If the dates are free, the owner confirms
-   or refunds. If the exclusion constraint rejects it, the reservation stays
-   `EXPIRED`, the payment is flagged, the owner is alerted and a refund is
-   issued under the documented policy. Money is never silently kept or lost.
-8. Balance: a reminder job sends a secure, expiring link that creates a fresh
-   Checkout Session for the outstanding schedule item. Payment updates the
-   item to `PAID` and the reservation to `CONFIRMED`.
-9. Cancellation and refunds follow the owner-approved policy (never inferred
-   from payment status alone); Stripe refund events update payment records;
-   disputes raise an owner alert.
-10. A nightly reconciliation compares Stripe balance transactions with the
-    internal payment records.
-
-The Phase 0 prototype (`src/server/payments/stripe-webhook.ts`) verifies
-signatures using stripe-node 23 (API `2026-09-30.endive`). Tests cover a valid
-signature, a tampered body, re-serialised JSON, the wrong secret and replays
-outside tolerance. No webhook route is exposed yet: acknowledging events
-without processing them would tell Stripe they were handled.
+2. Guest reviews the itemised quote (the full amount shown as "due once the
+   owner approves"), the steps above and the terms, then sends a request.
+3. `createHold` (one locked transaction) re-checks every block source and
+   inserts a `REQUESTED` reservation holding the dates until the owner's
+   deadline, with an immutable quote snapshot, the payment schedule, an audit
+   entry and two queued emails (guest acknowledgement, owner alert).
+4. The owner approves or declines in `/admin`. `approveRequest` re-checks the
+   deadline and every other calendar (owner blocks, Airbnb, Google) under the
+   property lock. Approval moves the hold to the guest's payment deadline and
+   emails a signed link. Declining releases the dates at once.
+5. The guest presses "Pay" on their booking page. `startCheckout` re-checks
+   state, deadline and imported calendars, records a `PENDING` payment for
+   the scheduled amount (never a client value) and creates a Checkout Session
+   with a stable idempotency key, `client_reference_id` and metadata. The
+   session never outlives the hold. Only one session can be live at a time.
+6. **Only verified payment confirms.** `applyCheckoutSession` runs from the
+   signature-verified webhook (event ID recorded in the same transaction) and
+   from the return page's server-side session fetch. It requires: the session
+   is recorded for this reservation and payment, paid, amount and currency
+   match, the reservation is still `APPROVED` (or an instant hold), and no
+   imported calendar now overlaps. Then `CONFIRMED` (or `PAYMENT_DUE` under a
+   deposit plan), and confirmation emails are queued.
+7. **Anything unusual goes to the owner, money is never silently kept or
+   lost**: amount mismatch, duplicate payment, payment after expiry, or a new
+   calendar clash → `REQUIRES_REVIEW` with a reason. If a late payment's dates
+   were re-booked, the reservation stays `EXPIRED` and the payment is flagged
+   "refund required". The owner is alerted in each case.
+8. Expired requests and approvals are swept by `/api/jobs/expire-holds`,
+   which also expires their open Checkout Sessions. Deadlines are also
+   enforced at request time, so a missed run never double-books.
+9. Refunds, cancellations and balance payments: not built yet; they depend on
+   the owner's cancellation policy (section 7).
 
 ## 4. Calendar sync design (Google and Airbnb)
 
@@ -149,9 +167,9 @@ connection can offer near-real-time two-way sync. See
 - **Health:** last attempt and last success per source, consecutive failures,
   a stale threshold, "Sync now", and owner alerts after repeated failures.
 
-The Phase 0 prototype covers the Airbnb side end to end in tests (parse,
-safety checks, reconciliation). Google OAuth is designed but **not
-prototyped**: it needs the owner's Google Cloud project and OAuth consent
+The Airbnb side is implemented (import job, admin health page, export feed,
+conflict alerts; see docs/INTEGRATIONS.md). Google OAuth is designed but
+**not built**: it needs the owner's Google Cloud project and OAuth consent
 screen (see owner decisions).
 
 ## 5. Owner decisions and credentials
@@ -162,69 +180,87 @@ provider's secret manager (names listed in `.env.example`).
 
 ## 6. Milestones and test gates
 
-| Phase                  | Scope                                                                                                         | Exit gate                                                                              | Status                                                                                                                                     |
-| ---------------------- | ------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
-| 0 Discovery            | Stack, risks, prototypes: iCal parsing, SSRF-safe fetch, Stripe signature verification, credential encryption | Architecture, providers, risks and owner inputs documented                             | **Done** (Google OAuth prototype pending credentials)                                                                                      |
-| 1 Foundation           | App, schema and migrations, CI, design tokens, layout, accessible primitives, gallery, public pages           | Build passes; pages responsive and accessible                                          | **Done**: build, 146 unit, 11 integration and 48 E2E tests with axe all pass locally. Content is placeholder pending the owner.            |
-| 2 Booking and pricing  | Pricing engine and quote snapshots, availability service, holds, admin auth, admin calendar and owner blocks  | Concurrency tests prove overlapping stays can't both confirm (DB layer already proven) | **Done** (see §7): 12 simultaneous overlapping hold requests give exactly one hold; 198 unit, 24 integration and 66 E2E tests pass locally |
-| 3 Stripe and comms     | Checkout, webhooks, schedule, balance links, refunds, reconciliation, email provider, notification jobs       | Stripe test-mode E2E incl. duplicate and failed webhooks                               |                                                                                                                                            |
-| 4 Calendar sync        | Airbnb import/export, Google OAuth and sync, conflict queue, health UI, alerts                                | Documented sync tests; visible failure handling; no real-time claims                   |                                                                                                                                            |
-| 5 Hardening and launch | Full audits, monitoring, backups and restore test, runbooks, owner UAT                                        | All charter §19 criteria; explicit owner launch approval                               |                                                                                                                                            |
+| Phase / milestone           | Scope                                                       | Status                                                                                              |
+| --------------------------- | ----------------------------------------------------------- | --------------------------------------------------------------------------------------------------- |
+| 0 Discovery                 | Stack, risks, prototypes                                    | **Done**                                                                                            |
+| 1 Foundation                | App, schema, CI, design system, public pages                | **Done**                                                                                            |
+| 2 Booking and pricing       | Pricing, availability, holds, admin                         | **Done**                                                                                            |
+| Brief M1 Audit              | Repository audit, property facts register                   | **Done**: docs/property-facts-and-policies.md                                                       |
+| Brief M2–M3 Requests        | Request statuses, migration, request holds, guest journey   | **Done**                                                                                            |
+| Brief M4 Owner approval     | Approve/decline, decision panel, requests queue, settings   | **Done** (admin login is still local-only; see §7)                                                  |
+| Brief M5 Test-mode payments | Checkout after approval, webhook, idempotency, review paths | **Done in code and tests**; not yet run against a Stripe sandbox (no test keys in this environment) |
+| Brief M7 Email              | Outbox, templates, Resend adapter, dispatcher, preview      | **Done**; delivery off by default, not yet run against Resend                                       |
+| Brief M6 Calendars          | Airbnb import, export feed, health, conflicts               | **Airbnb done**; Google Calendar not started (needs owner's Google Cloud project)                   |
+| Brief M8 Readiness          | Quality gates, docs, launch checklist                       | **Done**: docs/LAUNCH-READINESS.md                                                                  |
+| 5 Hardening and launch      | Audits, monitoring, backups, runbooks, UAT                  | Not started                                                                                         |
 
-## 7. Phase 2 — what was built and what is still open
+Test counts at the end of this work: 218 unit, 78 PostgreSQL integration,
+and 88 end-to-end tests (desktop and mobile, including axe WCAG 2.2 AA
+scans) with the booking engine on; 64 with it off.
 
-**Built**
+## 7. Still open
 
-- **Pricing engine** (`src/server/pricing/quote.ts`): nightly rates chosen by
-  priority, then specificity; Friday/Saturday rates; minimum stay and allowed
-  arrival days from the arrival night's rule; per-stay, per-night,
-  per-extra-guest and percentage fees; integer pence with half-up rounding;
-  deposit/balance schedule with a full-payment window. The whole quote,
-  including rule IDs and versions, is stored as the immutable snapshot.
-- **Availability** (`src/server/booking/availability.ts`): combines blocking
-  reservations, live (unexpired) holds, owner blocks and active external busy
-  periods, widened by the changeover buffer.
-- **Holds** (`src/server/booking/holds.ts`): one transaction that locks the
-  property row, replays duplicate submissions by idempotency key, expires
-  lapsed holds, re-checks every block source, prices from current rules, and
-  inserts the reservation, schedule and audit entry. The exclusion constraint
-  is the backstop. Holds last 30 minutes. The guest's access token is random,
-  stored only as a SHA-256 hash, and kept in an httpOnly cookie scoped to that
-  booking's page.
-- **Hold sweeper**: `GET /api/jobs/expire-holds` with
-  `Authorization: Bearer $CRON_SECRET`. Expiry is also enforced at request
-  time, so a missed run never double-books.
-- **Guest journey**: search → itemised quote, payment schedule and
-  availability calendar → guest details (name, email, optional phone, terms)
-  → hold page. **There is no payment step yet (Phase 3)**, so the flow only
-  appears when `BOOKING_PREVIEW=true`, a database is configured and the
-  property has bookings switched on. It is always off on Vercel production.
-- **Admin** (`/admin`): overview (upcoming stays, calendar connections,
-  activity), bookings search and detail (agreed price, schedule, history),
-  month calendar with a source label per night and conflict marking,
-  blocked dates (removal needs confirmation), pricing (rates with versioned
-  edits, fees, payment plan) and settings (occupancy, minimum stay,
-  changeover, horizon, times, bookings on/off). Every page and every server
-  action calls `requireAdmin()`, and every change is audit-logged with the
-  admin's email.
+**Blocked on owner decisions or accounts** (docs/OWNER-DECISIONS.md)
 
-**Open (deliberately not done yet)**
+- Real rates, fees, minimum stay, taxes; cancellation, refund and no-show
+  policy; booking terms. Quotes fail closed until rates exist.
+- Confirm the response and payment windows (defaults 24 h each).
+- A dedicated Supabase project. The two existing projects on the connected
+  account belong to another application and hold its data, so no Lodge
+  migration has been applied to Supabase. Everything was built and tested
+  against local PostgreSQL 16 (Supabase runs 17; nothing used is
+  version-specific).
+- Stripe sandbox keys for the Lodge (an "FYStay sandbox" account exists on
+  the connected Stripe login; confirm it is the right business).
+- Resend account and verified sending domain.
+- Google Cloud project and OAuth consent screen for Google Calendar.
 
-- **Managed admin login with MFA.** Admin currently supports only
-  `ADMIN_AUTH_MODE=local` (allowlisted email + shared password), meant for
-  local development and tests and refused on every Vercel deployment. The
-  Supabase Auth (MFA) adapter will be added once the owner chooses the
-  Supabase project. Until then the deployed admin is disabled.
-- **Rate limiting** on hold creation, enquiry and login endpoints (needs a
-  shared store, e.g. Postgres or Upstash). Required before public launch.
-- **Database on Vercel.** By owner decision, Phase 2 runs against a local
-  database only. The deployed preview shows the public site with the booking
-  engine off.
-- **Public pages still read facts from `src/content/property.ts`**, not the
-  database settings. They will be unified when the owner confirms the facts.
-- **Owner-entered (manual) bookings and cancellations** from admin: the
-  schema and state machine support them; the UI comes with Phase 3's
-  cancellation and refund workflow.
-- The guest hold page returns HTTP 200 with not-found content when the token
-  is wrong, because the page streams. No booking data is disclosed, which the
-  E2E tests check.
+**Engineering still to do**
+
+- **Managed admin login with MFA** (Supabase Auth adapter). Until then admin
+  works only locally (`ADMIN_AUTH_MODE=local` is refused on Vercel).
+- **Cancellation and refunds** (owner and guest), including the refund for a
+  "refund required" late payment, once the policy is approved. Today the
+  owner refunds in the Stripe dashboard and the review reason records why.
+- **Resolving review cases in admin** (confirm a reviewed paid booking, or
+  record a refund). The state machine and checks exist; the UI doesn't yet.
+- **Balance payments** for deposit plans (not needed for full payment).
+- **Google Calendar** OAuth, free/busy import and app-calendar export.
+- **Scheduler**: the three job routes need a scheduler (Vercel Cron needs
+  the Pro plan for 5–15 minute polling, or Supabase `pg_cron`). Not
+  configured: that is a deployment change needing approval.
+- **Stripe reconciliation job**, monitoring (Sentry), backups and restore
+  test, runbooks.
+- Public pages still read facts from `src/content/property.ts`, not the
+  database settings.
+
+## 8. Booking modes and payment ordering
+
+**Request mode (current, owner-chosen).** Guest requests, owner approves,
+guest pays in full, booking confirms on verified payment. Trade-offs: no card
+is ever charged or held for a declined request, so there is nothing to refund
+or void on decline. The cost is a second step for the guest, and a gap of up
+to the payment window between approval and confirmation, during which the
+dates are held but not paid. If the guest doesn't pay, the dates come back.
+
+**Alternative the owner could choose later: authorise at request time.**
+Stripe can place a hold on the card (manual capture) when the request is
+sent, captured on approval and released on decline. Smoother for guests, but
+card holds lapse after about 7 days, declined guests see a pending charge for
+a while, and the decline and expiry paths must void reliably. Not built;
+needs the owner's sign-off and a defined void/expiry policy first.
+
+**Instant mode (built, disabled).** `bookingMode = INSTANT` makes
+`createHold` place a 30-minute payment hold (`PENDING_PAYMENT`) and the same
+payment code confirms it. It is refused unless `INSTANT_BOOKING_APPROVED=true`.
+Before enabling it:
+
+1. Owner approves an instant-booking policy (who may book, cancellation
+   terms) and the payment sequence.
+2. The booking page shows the pay step straight after details (the
+   `HOLD_AWAITING_PAYMENT` status page and pay button already exist) and is
+   E2E-tested in that mode.
+3. Rate limits and hold length are reviewed for abuse (instant holds are
+   short, which limits it).
+4. The admin settings page gets a control to switch modes (today it only
+   displays the mode).

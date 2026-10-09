@@ -1,12 +1,17 @@
 "use server";
 
 import type { Route } from "next";
-import { cookies } from "next/headers";
+import { cookies, headers } from "next/headers";
 import { redirect } from "next/navigation";
 import { createHold, findReservationForGuest } from "@/server/booking/holds";
 import { startCheckout } from "@/server/payments/checkout";
 import { getPaymentGateway } from "@/server/payments/gateway";
 import { siteUrl } from "@/lib/site";
+import {
+  clientIp,
+  consumeRateLimit,
+  LIMITS,
+} from "@/server/security/rate-limit";
 import { getBookingContext } from "@/server/booking/public";
 import {
   holdRequestSchema,
@@ -57,6 +62,19 @@ export async function placeHold(
     };
 
   const data = parsed.data;
+  // Requests hold dates and send email, so they are limited per visitor and
+  // per guest email address.
+  const ip = clientIp(await headers());
+  const allowed =
+    (await consumeRateLimit(ctx.db, LIMITS.requestPerIp, ip)) &&
+    (await consumeRateLimit(ctx.db, LIMITS.requestPerEmail, data.email));
+  if (!allowed)
+    return {
+      status: "error",
+      message:
+        "You’ve sent several requests recently. Please try again later, or contact us directly.",
+      values,
+    };
   const result = await createHold(ctx.db, {
     propertyId: ctx.property.id,
     checkIn: data.checkIn,
@@ -123,6 +141,8 @@ export async function startPaymentAction(form: FormData) {
   if (!reservation) back("unavailable");
   const gateway = getPaymentGateway();
   if (!gateway) back("unavailable");
+  if (!(await consumeRateLimit(ctx.db, LIMITS.paymentPerBooking, ref)))
+    back("error");
 
   const result = await startCheckout(ctx.db, gateway, {
     reservationId: reservation.id,
