@@ -132,6 +132,7 @@ export async function reviewQueue(db: Executor, propertyId: string) {
       publicRef: reservations.publicRef,
       status: reservations.status,
       reviewReason: reservations.reviewReason,
+      cancellationRequestedAt: reservations.cancellationRequestedAt,
       checkIn: reservations.checkIn,
       checkOut: reservations.checkOut,
     })
@@ -141,7 +142,11 @@ export async function reviewQueue(db: Executor, propertyId: string) {
         eq(reservations.propertyId, propertyId),
         or(
           eq(reservations.status, "REQUIRES_REVIEW"),
-          sql`${reservations.reviewReason} LIKE '%REFUND_REQUIRED'`,
+          sql`${reservations.reviewReason} IS NOT NULL`,
+          and(
+            sql`${reservations.cancellationRequestedAt} IS NOT NULL`,
+            inArray(reservations.status, ["CONFIRMED", "PAYMENT_DUE"]),
+          ),
         ),
       ),
     )

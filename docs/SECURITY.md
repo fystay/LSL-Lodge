@@ -132,6 +132,21 @@ design needs nothing beyond the database. Switching later remains possible.
 Not yet done: a WebAuthn/passkey option, an in-dashboard user management
 page (CLI only for now), and email notification of new sign-ins.
 
+## Refunds, cancellations and operations
+
+- Refunds are owner actions only (OWNER role, fresh second factor, explicit
+  confirmation), capped at what remains refundable on a verified charge,
+  sent with a Stripe idempotency key, audit-logged with the admin's email,
+  and tracked forward-only from Stripe's response and `refund.*` webhooks.
+  No refund amount or eligibility is computed from a policy.
+- Guests can only withdraw unpaid requests or ask to cancel; both use the
+  booking's cookie credential and are rate-limited.
+- Job endpoints need `CRON_SECRET`; the health endpoint needs a separate
+  read-only `HEALTHCHECK_SECRET`. Run records and alerts carry counts and
+  codes only.
+- Row Level Security is on for every table, and Supabase's Data API roles
+  have no table privileges (tested with stand-in roles).
+
 ## Required before accepting bookings
 
 - CSRF: server actions are POST-only with Origin checks by Next.js. The custom

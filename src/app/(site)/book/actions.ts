@@ -4,7 +4,8 @@ import type { Route } from "next";
 import { cookies, headers } from "next/headers";
 import { redirect } from "next/navigation";
 import { createHold, findReservationForGuest } from "@/server/booking/holds";
-import { startCheckout } from "@/server/payments/checkout";
+import { guestCancel } from "@/server/booking/resolution";
+import { expireSessions, startCheckout } from "@/server/payments/checkout";
 import { getPaymentGateway } from "@/server/payments/gateway";
 import { siteUrl } from "@/lib/site";
 import {
@@ -160,4 +161,35 @@ export async function startPaymentAction(form: FormData) {
   if (!STRIPE_CHECKOUT.test(result.url)) back("error");
   // External (Stripe) URL: typed routes only cover our own paths.
   redirect(result.url as Route);
+}
+
+/**
+ * The guest withdraws an unpaid request/approval, or asks the owner to
+ * cancel a paid booking. Identity comes from the booking cookie only.
+ */
+export async function guestCancelAction(form: FormData) {
+  const ref = String(form.get("ref") ?? "");
+  if (!REF.test(ref)) redirect("/availability");
+  const back: (status: string) => never = (status) =>
+    redirect(`/book/${ref}?cancel=${status}`);
+  if (form.get("confirm") !== "yes") back("unconfirmed");
+
+  const token = (await cookies()).get(bookingCookieName(ref))?.value;
+  const ctx = await getBookingContext();
+  if (!ctx || !token) back("error");
+  const reservation = await findReservationForGuest(ctx.db, ref, token);
+  if (!reservation) back("error");
+  if (!(await consumeRateLimit(ctx.db, LIMITS.paymentPerBooking, ref)))
+    back("error");
+
+  const result = await guestCancel(ctx.db, {
+    propertyId: ctx.property.id,
+    reservationId: reservation.id,
+  });
+  if (!result.ok) back("error");
+  if (result.outcome === "WITHDRAWN") {
+    const gateway = getPaymentGateway();
+    if (gateway) await expireSessions(gateway, result.openSessions);
+  }
+  back(result.outcome === "WITHDRAWN" ? "withdrawn" : "requested");
 }

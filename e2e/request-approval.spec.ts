@@ -120,3 +120,54 @@ test("owner declines a request; the dates are released and nothing is owed", asy
   );
   await expect(page.getByText("Available for your dates")).toBeVisible();
 });
+
+const moreWeeks = {
+  desktop: {
+    withdraw: ["2027-05-03", "2027-05-06"],
+    cancel: ["2027-05-10", "2027-05-13"],
+  },
+  mobile: {
+    withdraw: ["2027-05-17", "2027-05-20"],
+    cancel: ["2027-05-24", "2027-05-27"],
+  },
+} as const;
+
+test("guest withdraws a request; nothing is charged and the dates are released", async ({
+  page,
+}, info) => {
+  const stay = moreWeeks[info.project.name as keyof typeof moreWeeks].withdraw;
+  await sendRequest(page, stay);
+  await page.getByText("Withdraw this request").click();
+  await page.getByLabel("Yes, withdraw my request").check();
+  await page.getByRole("button", { name: "Withdraw request" }).click();
+  await expect(
+    page
+      .getByRole("alert")
+      .filter({ hasText: "withdrawn. Nothing was charged" }),
+  ).toBeVisible();
+  await expect(page.getByRole("status").first()).toContainText("Cancelled");
+  await page.goto(
+    `/availability?checkIn=${stay[0]}&checkOut=${stay[1]}&guests=2`,
+  );
+  await expect(page.getByText("Available for your dates")).toBeVisible();
+});
+
+test("owner cancels an approved booking; the guest sees it cancelled", async ({
+  page,
+  browser,
+}, info) => {
+  const stay = moreWeeks[info.project.name as keyof typeof moreWeeks].cancel;
+  const ref = await sendRequest(page, stay);
+  const { owner, context } = await ownerOpens(browser, ref);
+  await owner.getByRole("button", { name: "Approve request" }).click();
+  await expect(owner.getByRole("status")).toContainText("Approved.");
+  await owner.getByLabel("Yes, cancel and release the dates").check();
+  await owner.getByRole("button", { name: "Cancel booking" }).click();
+  await expect(owner.getByRole("status")).toContainText(
+    "Nothing had been paid",
+  );
+  await context.close();
+
+  await page.reload();
+  await expect(page.getByRole("status").first()).toContainText("Cancelled");
+});

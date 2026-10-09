@@ -19,6 +19,7 @@ import {
   check,
   customType,
   date,
+  foreignKey,
   index,
   integer,
   jsonb,
@@ -383,6 +384,10 @@ export const reservations = pgTable(
     ownerNote: text("owner_note"),
     /** Machine-readable reason a reservation needs the owner (e.g. PAYMENT_AFTER_EXPIRY). */
     reviewReason: text("review_reason"),
+    /** The guest asked to cancel (the owner decides what happens). */
+    cancellationRequestedAt: timestamp("cancellation_requested_at", {
+      withTimezone: true,
+    }),
     idempotencyKey: text("idempotency_key").notNull().unique(),
     /** SHA-256 of the guest's booking-access token; the token is never stored. */
     accessTokenHash: text("access_token_hash").notNull(),
@@ -467,12 +472,25 @@ export const payments = pgTable(
     stripeRefundId: text("stripe_refund_id").unique(),
     /** When the Stripe Checkout Session stops accepting payment. */
     checkoutExpiresAt: timestamp("checkout_expires_at", { withTimezone: true }),
+    /** For a REFUND row: the charge it refunds. */
+    refundOfPaymentId: uuid("refund_of_payment_id"),
+    /** Admin who issued a refund; null for charges. */
+    initiatedBy: text("initiated_by"),
     /** Provider failure code only; never card details or raw messages. */
     failureCode: text("failure_code"),
     succeededAt: timestamp("succeeded_at", { withTimezone: true }),
     ...timestamps,
   },
   (t) => [
+    foreignKey({
+      columns: [t.refundOfPaymentId],
+      foreignColumns: [t.id],
+      name: "payments_refund_of_payment_id_fk",
+    }).onDelete("restrict"),
+    check(
+      "payments_refund_links_charge",
+      sql`(${t.kind} = 'REFUND') = (${t.refundOfPaymentId} IS NOT NULL)`,
+    ),
     check("payments_amount_positive", sql`${t.amountMinor} > 0`),
     index("payments_reservation_idx").on(t.reservationId),
   ],

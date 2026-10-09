@@ -119,8 +119,14 @@ guest request ──► REQUESTED ──owner approves──► APPROVED ──v
 8. Expired requests and approvals are swept by `/api/jobs/expire-holds`,
    which also expires their open Checkout Sessions. Deadlines are also
    enforced at request time, so a missed run never double-books.
-9. Refunds, cancellations and balance payments: not built yet; they depend on
-   the owner's cancellation policy (section 7).
+9. Cancellations and refunds: the owner cancels from admin (dates freed,
+   open payment sessions closed, "refund decision needed" flagged if money
+   was paid) and chooses any refund amount, issued through Stripe and
+   tracked by `refund.*` webhooks; a cancelled booking moves to
+   REFUND_PENDING and REFUNDED when everything paid is returned. Guests can
+   withdraw unpaid requests or ask to cancel a paid booking. Nothing is
+   calculated from a policy until one is approved. Balance payments
+   (deposit plans) are not built.
 
 ## 4. Calendar sync design (Google and Airbnb)
 
@@ -215,25 +221,26 @@ scans) with the booking engine on; 64 with it off.
 - Resend account and verified sending domain.
 - Google Cloud project and OAuth consent screen for Google Calendar.
 
-**Engineering still to do**
+**Engineering still to do** (status in docs/LAUNCH-READINESS.md)
 
-- Admin login: **done** (database accounts, password + authenticator app,
-  server-side sessions, roles, step-up, lockout; docs/SECURITY.md). Still
-  open: passkeys and an in-dashboard user management page.
-- **Cancellation and refunds** (owner and guest), including the refund for a
-  "refund required" late payment, once the policy is approved. Today the
-  owner refunds in the Stripe dashboard and the review reason records why.
-- **Resolving review cases in admin** (confirm a reviewed paid booking, or
-  record a refund). The state machine and checks exist; the UI doesn't yet.
-- **Balance payments** for deposit plans (not needed for full payment).
-- **Google Calendar** OAuth, free/busy import and app-calendar export.
-- **Scheduler**: the job system (leases, run log, health endpoint, alerts,
-  `/admin/system`) is built; a scheduler calling `/api/jobs/tick` and an
-  uptime monitor on `/api/health` still need configuring (docs/SCHEDULER.md).
-- **Stripe reconciliation job**, monitoring (Sentry), backups and restore
-  test, runbooks.
-- Public pages still read facts from `src/content/property.ts`, not the
-  database settings.
+- Admin sign-in: done (docs/SECURITY.md). Passkeys and in-dashboard user
+  management not built.
+- Cancellations and refunds: policy-independent foundations done (owner
+  cancels; owner chooses refund amounts, issued through Stripe and tracked
+  by webhooks; confirm-after-review; mark-as-handled; guest withdraw or
+  request-to-cancel). Wiring amounts and deadlines to an approved policy is
+  not done.
+- Background jobs: done (docs/SCHEDULER.md); a scheduler and an uptime
+  monitor still need configuring.
+- Supabase: RLS and a guarded migrate/verify script done
+  (docs/SUPABASE-DEV-SETUP.md); no dedicated project yet.
+- Stripe sandbox run: plan and opt-in spec ready (docs/STRIPE-SANDBOX-TEST.md),
+  not run.
+- Google Calendar: assessed (docs/GOOGLE-CALENDAR.md), not built.
+- Balance payments for deposit plans (not needed for full payment).
+- Stripe reconciliation job, error monitoring, retention/purge job,
+  backups and restore test, runbooks.
+- Public pages still read facts from `src/content/property.ts`.
 
 ## 8. Booking modes and payment ordering
 

@@ -16,8 +16,25 @@ import { formatMoney } from "@/lib/money";
 import { adminContext } from "@/server/admin/context";
 import { reservationConflicts, reservationDetail } from "@/server/admin/data";
 import { paymentsConfigured } from "@/server/payments/gateway";
+import { refundableCharges } from "@/server/payments/refunds";
+import { penceToPounds } from "@/server/admin/schemas";
 import type { Quote } from "@/server/pricing/quote";
-import { approveRequestAction, declineRequestAction } from "../../../actions";
+import {
+  approveRequestAction,
+  cancelBookingAction,
+  confirmReviewedAction,
+  declineRequestAction,
+  refundAction,
+  resolveFlagAction,
+} from "../../../actions";
+
+const CANCELLABLE = [
+  "APPROVED",
+  "PENDING_PAYMENT",
+  "CONFIRMED",
+  "PAYMENT_DUE",
+  "REQUIRES_REVIEW",
+];
 
 export const metadata = { title: "Booking" };
 
@@ -42,6 +59,10 @@ const REVIEW_REASON: Record<string, string> = {
     "Payment was received, but another calendar now overlaps these dates. Resolve the clash before confirming.",
   DUPLICATE_PAYMENT:
     "A second payment was received for an already confirmed booking. Refund the duplicate.",
+  DUPLICATE_PAYMENT_REFUND_REQUIRED:
+    "A second payment was received for this confirmed booking. The booking stands; refund the extra payment below.",
+  CANCELLED_REFUND_DECISION:
+    "This booking was cancelled after payment. Decide on any refund under your policy, then refund below or mark it handled.",
   NOT_APPROVED: "Payment was received for a request that was never approved.",
 };
 
@@ -93,6 +114,13 @@ async function Detail({
   const reason = r.reviewReason
     ? (REVIEW_REASON[r.reviewReason] ?? r.reviewReason)
     : null;
+  const charges = await refundableCharges(ctx.db, r.id);
+  const refundable = charges.filter((c) => c.refundableMinor > 0);
+  const canCancel = CANCELLABLE.includes(r.status);
+  const showActions =
+    canCancel ||
+    refundable.length > 0 ||
+    (r.reviewReason && r.status !== "REQUIRES_REVIEW");
 
   return (
     <>
@@ -111,6 +139,157 @@ async function Detail({
         >
           Needs your attention: {reason}
         </p>
+      )}
+
+      {r.cancellationRequestedAt &&
+        !["CANCELLED", "REFUND_PENDING", "REFUNDED"].includes(r.status) && (
+          <p
+            role="status"
+            className="mt-4 rounded-soft border border-notice-ink/30 bg-notice p-4 text-notice-ink"
+          >
+            The guest asked to cancel on {when(r.cancellationRequestedAt)}. The
+            booking stands until you act.
+          </p>
+        )}
+
+      {showActions && (
+        <div className="mt-6">
+          <AdminSection id="actions" title="Resolve, cancel or refund">
+            <p className="text-sm text-ink-muted">
+              These actions ask for a fresh authenticator code. Refund amounts
+              are your decision: nothing is calculated from a policy.
+            </p>
+            <div className="mt-4 grid gap-6 md:grid-cols-2">
+              {r.status === "REQUIRES_REVIEW" && (
+                <form action={confirmReviewedAction} className="space-y-3">
+                  <input type="hidden" name="id" value={r.id} />
+                  <h3 className="font-sans text-base font-semibold">
+                    Confirm the booking
+                  </h3>
+                  <p className="text-sm">
+                    Only possible when verified payments cover the agreed{" "}
+                    {formatMoney(r.totalMinor, r.currency)} and nothing else
+                    overlaps the dates.
+                  </p>
+                  <button type="submit" className={primaryButton}>
+                    Confirm booking
+                  </button>
+                </form>
+              )}
+              {canCancel && (
+                <form action={cancelBookingAction} className="space-y-3">
+                  <input type="hidden" name="id" value={r.id} />
+                  <h3 className="font-sans text-base font-semibold">
+                    Cancel the booking
+                  </h3>
+                  <label
+                    htmlFor="cancel-note"
+                    className="block text-sm font-semibold"
+                  >
+                    Private note (optional)
+                  </label>
+                  <textarea
+                    id="cancel-note"
+                    name="ownerNote"
+                    rows={2}
+                    maxLength={1000}
+                    className={inputClass}
+                  />
+                  <label className="flex min-h-11 items-center gap-3">
+                    <input
+                      type="checkbox"
+                      name="confirm"
+                      value="yes"
+                      className="size-5"
+                    />
+                    <span>Yes, cancel and release the dates</span>
+                  </label>
+                  <button type="submit" className={smallButton}>
+                    Cancel booking
+                  </button>
+                </form>
+              )}
+              {refundable.map(({ charge, refundableMinor }) => (
+                <form
+                  key={charge.id}
+                  action={refundAction}
+                  className="space-y-3"
+                >
+                  <input type="hidden" name="id" value={r.id} />
+                  <input type="hidden" name="chargeId" value={charge.id} />
+                  <h3 className="font-sans text-base font-semibold">
+                    Refund payment of{" "}
+                    {formatMoney(charge.amountMinor, charge.currency)}
+                  </h3>
+                  <p className="text-sm">
+                    Up to {formatMoney(refundableMinor, charge.currency)} can
+                    still be refunded
+                    {charge.failureCode?.endsWith("REFUND_REQUIRED")
+                      ? " (flagged for refund)"
+                      : ""}
+                    .
+                  </p>
+                  <label
+                    htmlFor={`amount-${charge.id}`}
+                    className="block text-sm font-semibold"
+                  >
+                    Amount to refund (£)
+                  </label>
+                  <input
+                    id={`amount-${charge.id}`}
+                    name="amount"
+                    inputMode="decimal"
+                    required
+                    defaultValue={penceToPounds(refundableMinor)}
+                    className={inputClass}
+                  />
+                  <label className="flex min-h-11 items-center gap-3">
+                    <input
+                      type="checkbox"
+                      name="confirm"
+                      value="yes"
+                      className="size-5"
+                    />
+                    <span>Yes, send this refund to the guest&rsquo;s card</span>
+                  </label>
+                  <button
+                    type="submit"
+                    className={smallButton}
+                    disabled={!paymentsConfigured()}
+                  >
+                    Refund
+                  </button>
+                </form>
+              ))}
+              {r.reviewReason && r.status !== "REQUIRES_REVIEW" && (
+                <form action={resolveFlagAction} className="space-y-3">
+                  <input type="hidden" name="id" value={r.id} />
+                  <h3 className="font-sans text-base font-semibold">
+                    Mark as handled
+                  </h3>
+                  <label
+                    htmlFor="resolve-note"
+                    className="block text-sm font-semibold"
+                  >
+                    How was it handled? (kept in the history)
+                  </label>
+                  <textarea
+                    id="resolve-note"
+                    name="note"
+                    rows={2}
+                    required
+                    minLength={3}
+                    maxLength={500}
+                    className={inputClass}
+                  />
+                  <button type="submit" className={smallButton}>
+                    Mark as handled
+                  </button>
+                </form>
+              )}
+            </div>
+          </AdminSection>
+        </div>
       )}
 
       {pending && (

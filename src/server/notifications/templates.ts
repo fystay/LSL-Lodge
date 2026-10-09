@@ -270,6 +270,43 @@ export const TEMPLATES: Record<
       ],
       d,
     ),
+  booking_cancelled: (d) =>
+    render(
+      "Your booking has been cancelled",
+      [
+        { p: `Hello ${d.guestName},` },
+        {
+          p: "Your booking has been cancelled by the owner and the dates have been released. If you have made a payment, the owner will contact you about it.",
+        },
+        { list: stayLines(d) },
+        bookingLink(d, "View your booking"),
+      ],
+      d,
+    ),
+  owner_booking_withdrawn: (d) =>
+    render(
+      "A guest withdrew their booking request",
+      [
+        {
+          p: "The guest withdrew this request (or approved booking) before paying. Nothing was charged and the dates are free again.",
+        },
+        { list: stayLines(d) },
+        adminLink(d),
+      ],
+      d,
+    ),
+  owner_cancellation_requested: (d) =>
+    render(
+      "A guest has asked to cancel",
+      [
+        {
+          p: "The guest has asked to cancel this paid booking. Nothing has changed yet: the booking stands until you act. Decide under your cancellation policy, then cancel and refund (or not) in admin.",
+        },
+        { list: stayLines(d) },
+        adminLink(d),
+      ],
+      d,
+    ),
   owner_system_alert: (d) =>
     render(
       "Booking system needs attention",

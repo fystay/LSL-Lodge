@@ -47,6 +47,7 @@ const RELEVANT: Partial<Record<NotificationTemplate, ReservationStatus[]>> = {
   request_expired: ["EXPIRED"],
   payment_window_expired: ["EXPIRED"],
   booking_confirmed: ["CONFIRMED", "PAYMENT_DUE"],
+  booking_cancelled: ["CANCELLED", "REFUND_PENDING", "REFUNDED"],
 };
 
 export interface DispatchResult {

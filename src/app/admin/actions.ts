@@ -4,6 +4,14 @@ import type { Route } from "next";
 import { redirect } from "next/navigation";
 import { createOwnerBlock, removeOwnerBlock } from "@/server/booking/holds";
 import { approveRequest, declineRequest } from "@/server/booking/requests";
+import {
+  cancelByOwner,
+  confirmReviewedBooking,
+  markFlagResolved,
+} from "@/server/booking/resolution";
+import { expireSessions } from "@/server/payments/checkout";
+import { getPaymentGateway } from "@/server/payments/gateway";
+import { issueRefund } from "@/server/payments/refunds";
 import { addIcalSource, syncIcalSource } from "@/server/calendar/sync";
 import { calendarSources, setCalendarSourceEnabled } from "@/server/admin/data";
 import { requireAdmin } from "@/server/admin/auth";
@@ -22,6 +30,8 @@ import {
 import {
   feeRuleSchema,
   fieldErrors,
+  parsePounds,
+  penceToPounds,
   ownerBlockSchema,
   paymentPolicySchema,
   propertySettingsSchema,
@@ -151,6 +161,121 @@ export async function declineRequestAction(form: FormData) {
     result.ok
       ? { saved: "Declined. The dates are free again and nothing was charged." }
       : { error: "This request has already been decided." },
+  );
+}
+
+// --- Resolving bookings, cancellations and refunds ----------------------------------------
+// All of these involve money or a guest's stay, so they need a fresh code.
+
+export async function confirmReviewedAction(form: FormData) {
+  const id = uuid(form.get("id"));
+  if (!id) back("/admin/bookings", { error: "Unknown booking." });
+  const path = `/admin/bookings/${id}`;
+  const ctx = await ready(path, true);
+  const result = await confirmReviewedBooking(ctx.db, {
+    propertyId: ctx.property.id,
+    reservationId: id,
+    actor: ctx.admin.email,
+  });
+  if (result.ok)
+    back(path, { saved: "Booking confirmed. The guest will be told." });
+  back(path, {
+    error:
+      result.reason === "NOT_PAID_IN_FULL"
+        ? "Can’t confirm: verified payments don’t cover the agreed total."
+        : result.reason === "CONFLICT"
+          ? `Can’t confirm: the dates now overlap ${result.sources.map((s) => CONFLICT_SOURCE[s] ?? s).join(" and ")}.`
+          : "This booking isn’t awaiting review.",
+  });
+}
+
+export async function cancelBookingAction(form: FormData) {
+  const id = uuid(form.get("id"));
+  if (!id) back("/admin/bookings", { error: "Unknown booking." });
+  const path = `/admin/bookings/${id}`;
+  const ctx = await ready(path, true);
+  if (form.get("confirm") !== "yes")
+    back(path, { error: "Tick the box to confirm the cancellation." });
+  const result = await cancelByOwner(ctx.db, {
+    propertyId: ctx.property.id,
+    reservationId: id,
+    actor: ctx.admin.email,
+    ownerNote: String(form.get("ownerNote") ?? ""),
+  });
+  if (!result.ok)
+    back(path, { error: "This booking can’t be cancelled from here." });
+  const gateway = getPaymentGateway();
+  if (gateway) await expireSessions(gateway, result.openSessions);
+  back(path, {
+    saved: result.paid
+      ? "Cancelled and the dates released. Money was paid: decide on any refund below."
+      : "Cancelled and the dates released. Nothing had been paid.",
+  });
+}
+
+export async function refundAction(form: FormData) {
+  const id = uuid(form.get("id"));
+  const chargeId = uuid(form.get("chargeId"));
+  if (!id || !chargeId) back("/admin/bookings", { error: "Unknown payment." });
+  const path = `/admin/bookings/${id}`;
+  const ctx = await ready(path, true);
+  if (form.get("confirm") !== "yes")
+    back(path, { error: "Tick the box to confirm the refund." });
+  const amount = parsePounds(String(form.get("amount") ?? ""));
+  if (amount === null)
+    back(path, { error: "Enter the refund in pounds, e.g. 150 or 150.50." });
+  const gateway = getPaymentGateway();
+  if (!gateway)
+    back(path, {
+      error:
+        "Card payments aren’t configured, so refunds can’t be issued here.",
+    });
+  const result = await issueRefund(ctx.db, gateway, {
+    propertyId: ctx.property.id,
+    reservationId: id,
+    chargePaymentId: chargeId,
+    amountMinor: amount,
+    actor: ctx.admin.email,
+  });
+  if (result.ok)
+    back(path, {
+      saved:
+        result.status === "SUCCEEDED"
+          ? "Refund issued."
+          : "Refund requested; Stripe is processing it.",
+    });
+  back(path, {
+    error:
+      result.reason === "INVALID_AMOUNT"
+        ? `Enter an amount up to the £${penceToPounds(result.refundableMinor ?? 0)} still refundable on that payment.`
+        : result.reason === "PROVIDER_ERROR"
+          ? "Stripe didn’t accept the refund. Nothing was refunded; try again shortly."
+          : "That payment can’t be refunded.",
+  });
+}
+
+export async function resolveFlagAction(form: FormData) {
+  const id = uuid(form.get("id"));
+  if (!id) back("/admin/bookings", { error: "Unknown booking." });
+  const path = `/admin/bookings/${id}`;
+  const ctx = await ready(path, true);
+  const note = String(form.get("note") ?? "").trim();
+  if (note.length < 3)
+    back(path, { error: "Add a short note saying how it was handled." });
+  const result = await markFlagResolved(ctx.db, {
+    propertyId: ctx.property.id,
+    reservationId: id,
+    actor: ctx.admin.email,
+    note,
+  });
+  back(
+    path,
+    result.ok
+      ? { saved: "Marked as handled." }
+      : {
+          error:
+            "A booking under review must be confirmed or cancelled instead.",
+        },
   );
 }
 

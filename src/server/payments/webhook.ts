@@ -8,7 +8,8 @@ import {
   markCheckoutFailed,
   type ApplyOutcome,
 } from "./checkout";
-import { snapshotFromStripe } from "./gateway";
+import { refundFromStripe, snapshotFromStripe } from "./gateway";
+import { applyRefundSnapshot } from "./refunds";
 
 /**
  * Processes a signature-verified Stripe event exactly once.
@@ -26,8 +27,16 @@ export type WebhookOutcome =
   | {
       handled: "applied";
       type: string;
-      outcome: ApplyOutcome | "FAILED_MARKED";
+      outcome:
+        ApplyOutcome | "FAILED_MARKED" | "REFUND_APPLIED" | "REFUND_UNKNOWN";
     };
+
+/** Refunds issued from admin report progress through these. */
+const REFUND_EVENTS = new Set([
+  "refund.created",
+  "refund.updated",
+  "refund.failed",
+]);
 
 const CHECKOUT_EVENTS = new Set([
   "checkout.session.completed",
@@ -74,6 +83,19 @@ export async function processStripeEvent(
             lastErrorCode: null,
           })
           .where(eq(webhookEvents.id, row.id));
+
+      if (REFUND_EVENTS.has(event.type)) {
+        const applied = await applyRefundSnapshot(
+          tx,
+          refundFromStripe(event.data.object as Stripe.Refund),
+        );
+        await finish("PROCESSED");
+        return {
+          handled: "applied",
+          type: event.type,
+          outcome: applied ? "REFUND_APPLIED" : "REFUND_UNKNOWN",
+        } as const;
+      }
 
       if (!CHECKOUT_EVENTS.has(event.type)) {
         await finish("IGNORED");

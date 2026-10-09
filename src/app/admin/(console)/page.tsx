@@ -137,7 +137,11 @@ async function Overview({
                 </span>
                 <span>{statusLabel(q.status)}</span>
                 <span className="font-semibold text-danger">
-                  {(q.reviewReason ?? "").replaceAll("_", " ").toLowerCase()}
+                  {q.reviewReason
+                    ? q.reviewReason.replaceAll("_", " ").toLowerCase()
+                    : q.cancellationRequestedAt
+                      ? "guest asked to cancel"
+                      : ""}
                 </span>
               </li>
             ))}
