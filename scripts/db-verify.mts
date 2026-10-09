@@ -29,7 +29,7 @@ const wantMigrate = process.argv.includes("--migrate");
 const host = new URL(url).hostname;
 
 const ours = new Set(
-  Object.values(schema)
+  (Object.values(schema) as unknown[])
     .filter((v): v is PgTable => is(v, PgTable))
     .map((t) => getTableConfig(t).name),
 );
