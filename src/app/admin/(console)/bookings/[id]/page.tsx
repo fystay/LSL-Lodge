@@ -1,3 +1,4 @@
+import Link from "next/link";
 import { notFound } from "next/navigation";
 import { Suspense } from "react";
 import {
@@ -317,7 +318,13 @@ async function Detail({
                       ? "not sent (email delivery off)"
                       : n.status.toLowerCase()}
                   </strong>
-                  {n.lastErrorCode ? ` · ${n.lastErrorCode}` : ""}
+                  {n.lastErrorCode ? ` · ${n.lastErrorCode}` : ""} ·{" "}
+                  <Link
+                    href={`/admin/bookings/${r.id}/messages/${n.id}`}
+                    className="underline underline-offset-4"
+                  >
+                    Preview
+                  </Link>
                 </li>
               ))}
             </ul>

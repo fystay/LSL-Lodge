@@ -8,12 +8,6 @@ import { z } from "zod";
  * error rather than limping along.
  */
 
-const optional = z
-  .string()
-  .trim()
-  .transform((value) => (value === "" ? undefined : value))
-  .optional();
-
 const databaseSchema = z.object({
   DATABASE_URL: z.string().url(),
 });
@@ -31,12 +25,6 @@ const encryptionSchema = z.object({
 const stripeSchema = z.object({
   STRIPE_SECRET_KEY: z.string().startsWith("sk_"),
   STRIPE_WEBHOOK_SECRET: z.string().startsWith("whsec_"),
-});
-
-const emailSchema = z.object({
-  EMAIL_PROVIDER_API_KEY: optional,
-  EMAIL_FROM_ADDRESS: optional,
-  OWNER_NOTIFICATION_EMAIL: optional,
 });
 
 export class ConfigurationError extends Error {
@@ -63,7 +51,6 @@ function parse<T extends z.ZodTypeAny>(feature: string, schema: T): z.infer<T> {
 export const databaseEnv = () => parse("Database", databaseSchema);
 export const encryptionEnv = () => parse("Encryption", encryptionSchema);
 export const stripeEnv = () => parse("Stripe", stripeSchema);
-export const emailEnv = () => parse("Email", emailSchema);
 
 /** Stripe live keys are refused unless live payments were explicitly enabled. */
 export function assertStripeTestModeUnlessApproved(secretKey: string) {
