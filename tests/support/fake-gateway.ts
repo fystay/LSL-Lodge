@@ -81,6 +81,12 @@ export class FakeGateway implements PaymentGateway {
     return s;
   }
 
+  async retrieveRefund(id: string) {
+    const r = this.refunds.get(id);
+    if (!r) throw new Error("No such refund");
+    return { ...r };
+  }
+
   async expireCheckoutSession(id: string) {
     const s = this.sessions.get(id);
     if (s?.status === "open") {

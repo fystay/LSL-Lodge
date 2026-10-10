@@ -20,8 +20,10 @@ export const JOB_SCHEDULE = [
   { name: "expire-holds", staleAfterMinutes: 20 },
   { name: "send-notifications", staleAfterMinutes: 20 },
   { name: "process-refunds", staleAfterMinutes: 20 },
+  { name: "reconcile-payments", staleAfterMinutes: 60 },
   { name: "sync-calendars", staleAfterMinutes: 30 },
   { name: "maintenance", staleAfterMinutes: 3 * 60 },
+  { name: "data-retention", staleAfterMinutes: 3 * 24 * 60 },
 ] as const;
 
 export interface JobStatus {

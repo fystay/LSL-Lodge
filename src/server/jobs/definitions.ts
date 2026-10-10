@@ -10,7 +10,9 @@ import { getEmailSender } from "@/server/notifications/email";
 import { enqueueNotification } from "@/server/notifications/outbox";
 import { cancelOpenCheckouts } from "@/server/payments/checkout";
 import { getPaymentGateway } from "@/server/payments/gateway";
+import { reconcilePayments } from "@/server/payments/reconcile";
 import { processPendingRefunds } from "@/server/payments/refunds";
+import { applyRetention } from "@/server/privacy/retention";
 import { pruneRateLimits } from "@/server/security/rate-limit";
 import { systemHealth } from "./health";
 import {
@@ -79,6 +81,32 @@ export const processRefundsJob: JobDefinition = {
   },
 };
 
+/**
+ * Re-reads from Stripe any payment or refund still unsettled 10 minutes
+ * after it started, in case its webhook never arrived (missed, or the site
+ * was down), and applies it through the webhook's own idempotent code.
+ */
+export const reconcilePaymentsJob: JobDefinition = {
+  name: "reconcile-payments",
+  everyMinutes: 15,
+  staleAfterMinutes: 60,
+  timeoutMs: 120_000,
+  async run(db, now) {
+    return { ...(await reconcilePayments(db, getPaymentGateway(), now)) };
+  },
+};
+
+/** Removes guest details and old operational records past their retention. */
+export const retentionJob: JobDefinition = {
+  name: "data-retention",
+  everyMinutes: 24 * 60,
+  staleAfterMinutes: 3 * 24 * 60,
+  timeoutMs: 120_000,
+  async run(db, now) {
+    return applyRetention(db, now);
+  },
+};
+
 export const syncCalendarsJob: JobDefinition = {
   name: "sync-calendars",
   everyMinutes: 5,
@@ -135,8 +163,10 @@ export const JOBS: readonly JobDefinition[] = [
   expireHoldsJob,
   sendNotificationsJob,
   processRefundsJob,
+  reconcilePaymentsJob,
   syncCalendarsJob,
   maintenanceJob,
+  retentionJob,
 ];
 
 /**

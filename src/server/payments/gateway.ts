@@ -63,6 +63,8 @@ export interface PaymentGateway {
     params: CreateCheckoutParams,
   ): Promise<CheckoutSessionSnapshot>;
   retrieveCheckoutSession(id: string): Promise<CheckoutSessionSnapshot>;
+  /** Stripe's current view of a refund (reconciliation). */
+  retrieveRefund(id: string): Promise<RefundSnapshot>;
   /** Stops an open session accepting payment. No-op if it already ended. */
   expireCheckoutSession(id: string): Promise<void>;
 }
@@ -185,6 +187,10 @@ class StripeCheckoutGateway implements PaymentGateway {
 
   async retrieveCheckoutSession(id: string) {
     return snapshotFromStripe(await this.stripe.checkout.sessions.retrieve(id));
+  }
+
+  async retrieveRefund(id: string) {
+    return refundFromStripe(await this.stripe.refunds.retrieve(id));
   }
 
   async expireCheckoutSession(id: string) {

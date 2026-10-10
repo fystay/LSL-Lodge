@@ -40,6 +40,10 @@ const journal = JSON.parse(
 };
 
 const sql = postgres(url, { max: 1, onnotice: () => {}, prepare: false });
+// A shared database keeps the Lodge in its own schema (scripts/migrate.mts).
+const SCHEMA = process.env.DATABASE_SCHEMA ?? "public";
+const isolated = SCHEMA !== "public";
+if (isolated) ours.add("__drizzle_migrations");
 let failures = 0;
 const check = (label: string, ok: boolean, detail = "") => {
   if (!ok) failures++;
@@ -54,11 +58,11 @@ try {
   console.log(`Connected to ${host}, database "${db}", PostgreSQL ${version}.`);
 
   const present = (
-    await sql`SELECT tablename FROM pg_tables WHERE schemaname = 'public'`
+    await sql`SELECT tablename FROM pg_tables WHERE schemaname = ${SCHEMA}`
   ).map((r) => r.tablename as string);
   const foreign = present.filter((t) => !ours.has(t));
   check(
-    "no tables from another application in public",
+    `no tables from another application in ${SCHEMA}`,
     foreign.length === 0,
     foreign.length
       ? `found ${foreign.slice(0, 8).join(", ")}${foreign.length > 8 ? ", …" : ""}`
@@ -66,6 +70,12 @@ try {
   );
 
   if (wantMigrate) {
+    if (isolated) {
+      console.error(
+        "\nFor a schema-isolated database, migrate with `pnpm db:migrate` (DATABASE_SCHEMA set).",
+      );
+      process.exit(2);
+    }
     if (foreign.length > 0) {
       console.error(
         "\nRefusing to migrate: this database belongs to something else.",
@@ -84,7 +94,7 @@ try {
 
   const after = new Set(
     (
-      await sql`SELECT tablename FROM pg_tables WHERE schemaname = 'public'`
+      await sql`SELECT tablename FROM pg_tables WHERE schemaname = ${SCHEMA}`
     ).map((r) => r.tablename as string),
   );
   const missing = [...ours].filter((t) => !after.has(t));
@@ -95,7 +105,7 @@ try {
   );
 
   const applied =
-    await sql`SELECT count(*)::int AS n FROM drizzle.__drizzle_migrations`.catch(
+    await sql`SELECT count(*)::int AS n FROM ${sql(isolated ? SCHEMA : "drizzle")}.__drizzle_migrations`.catch(
       () => [{ n: 0 }],
     );
   check(
@@ -114,7 +124,7 @@ try {
   check("overlap exclusion constraint present", excl.n === 1);
 
   const triggers = (
-    await sql`SELECT tgname FROM pg_trigger WHERE tgrelid IN ('public.reservations'::regclass, 'public.owner_blocks'::regclass) AND NOT tgisinternal`.catch(
+    await sql`SELECT tgname FROM pg_trigger WHERE tgrelid IN (${`${SCHEMA}.reservations`}::regclass, ${`${SCHEMA}.owner_blocks`}::regclass) AND NOT tgisinternal`.catch(
       () => [],
     )
   ).map((r) => r.tgname as string);
@@ -129,11 +139,11 @@ try {
     check(`trigger ${name}`, triggers.includes(name));
 
   const [idx] = await sql`
-    SELECT count(*)::int AS n FROM pg_indexes WHERE schemaname = 'public'`;
+    SELECT count(*)::int AS n FROM pg_indexes WHERE schemaname = ${SCHEMA}`;
   check("indexes present", idx.n >= 30, `${idx.n} indexes`);
 
   const noRls = (
-    await sql`SELECT tablename FROM pg_tables WHERE schemaname = 'public' AND NOT rowsecurity`
+    await sql`SELECT tablename FROM pg_tables WHERE schemaname = ${SCHEMA} AND NOT rowsecurity`
   ).map((r) => r.tablename as string);
   check(
     "row level security enabled on every table",
@@ -147,7 +157,7 @@ try {
     if (!exists.n) continue;
     const [grants] = await sql`
       SELECT count(*)::int AS n FROM information_schema.role_table_grants
-      WHERE grantee = ${role} AND table_schema = 'public'`;
+      WHERE grantee = ${role} AND table_schema = ${SCHEMA}`;
     check(
       `Data API role "${role}" has no table privileges`,
       grants.n === 0,

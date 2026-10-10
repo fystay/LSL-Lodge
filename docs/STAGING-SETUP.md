@@ -1,10 +1,12 @@
 # Staging setup (customer demo)
 
-Status: 10 October 2026. **Not set up.** No staging database, no Lodge
-Stripe sandbox and no staging environment variables exist yet. This is the
-recipe, with the decisions and access it needs from the owner. Nothing here
-touches production (lsllodge.vercel.app), the other app's two Supabase
-projects, or the other app's Stripe sandbox.
+Status: 10 October 2026. **Partly set up.** The Lodge's staging database
+now lives in the owner-authorised Supabase project `lsllodge`
+(`sqkpixwvugrxllrxlexs`), isolated in its own schema (§1); migrations
+0000–0001 are applied there, 0002–0010 are waiting for you (§5). There is
+still no Lodge Stripe sandbox and no staging environment variables on
+Vercel. Nothing here touches production (lsllodge.vercel.app), the other
+application's tables in that project, or the other app's Stripe sandbox.
 
 ## What "staging" is
 
@@ -28,32 +30,34 @@ production by design:
   `/admin`, never sent.
 - Search engines are told not to index it (`SITE_INDEXABLE` unset).
 
-## 1. A database just for the Lodge (owner decision)
+## 1. The database: `lsllodge`, schema `lodge`
 
-Supabase refused a third project on 10 October 2026: the owner's account is
-at the free plan's limit of **2 active projects**, and both belong to
-another app (not touched, and not to be paused or reused without the owner's
-say-so).
+The project you authorised for Lodge staging still holds **another
+application's live-looking data** in `public` (47 tables, e.g. `User`,
+`Booking`, `_prisma_migrations`). The Lodge's committed migrations would
+have re-permissioned every table in `public` (migration 0005 enables RLS on
+and revokes Data API access from all of them), so they are never run there.
+Instead:
 
-| Option                                                                     | Cost                                                                                                                                                                 | Who acts                                                                                     | Notes                                                                                                                                                                                                                |
-| -------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **A. Supabase under a separate account** (e.g. a Lodge business email)     | Free                                                                                                                                                                 | Owner creates the account, org and project `lodge-on-the-lake-staging` in London (eu-west-2) | **Recommended.** Fully isolated from the other app. Free projects pause after a week idle (resume in the dashboard before a demo); daily backups only. Same setup as [SUPABASE-DEV-SETUP.md](SUPABASE-DEV-SETUP.md). |
-| **B. Neon free plan via the Vercel Marketplace** (Storage → Create → Neon) | Free (Neon's free plan: compute hours and ~0.5–1 GB storage per project; suspends rather than bills at the limit)                                                    | Owner approves creating the resource in the Vercel team                                      | Quickest. Plain PostgreSQL: create the `anon` and `authenticated` roles before migrating (see below). Not Supabase, so the RLS checks in `db:verify` test stand-in roles.                                            |
-| C. Upgrade the FYStay Supabase organisation to Pro                         | From **$25/month per organisation**, plus compute per project (one Micro project is covered by the included $10 credit; each extra Micro project is about $10/month) | Owner (billing)                                                                              | Shares an organisation with the other app; keep the projects separate.                                                                                                                                               |
-| D. Pause one of the other app's projects                                   | Free                                                                                                                                                                 | Owner only                                                                                   | **Not recommended**, and not done here: it changes another app.                                                                                                                                                      |
+- Every Lodge object lives in the schema **`lodge`**, owned by the role
+  **`lodge_app`** ([scripts/staging-database.sql](../scripts/staging-database.sql),
+  applied 10 October 2026). `lodge_app` has `search_path = lodge`, no
+  privileges on anything in `public`, and a 30 s statement timeout.
+- `pnpm db:migrate` with `DATABASE_SCHEMA=lodge` rewrites the migrations'
+  explicit `public` references to `lodge`, refuses to run unless the
+  connection resolves names in `lodge`, and pins every Lodge function's
+  `search_path`. `public` is never touched; rehearsed locally against a
+  copy with a stand-in "other app" table (its rows, RLS and grants
+  unchanged after migrations and the full E2E suite).
+- `lodge` isn't exposed through Supabase's Data API (only the schemas in
+  API settings are), and the migrations revoke `anon`/`authenticated`
+  anyway.
 
-Whichever is chosen, the **owner** creates it and keeps the password in a
-password manager. Never paste a connection string into chat, email or the
-repository.
-
-For option B only, before migrating, connect with the unpooled string and
-run:
-
-```sql
-CREATE ROLE anon NOLOGIN;
-CREATE ROLE authenticated NOLOGIN;
-GRANT USAGE ON SCHEMA public TO anon, authenticated;
-```
+Applied so far (via the Supabase connector): the setup script, and
+migrations 0000–0001. The rest stopped because the connector asks for a
+person's confirmation before any statement containing `DROP` (migrations
+0002, 0008 and 0009 replace triggers and types), which this session can't
+give. Nothing was half-applied: each step is one transaction.
 
 ## 2. A Stripe sandbox just for the Lodge (owner)
 
@@ -74,8 +78,9 @@ secrets as Sensitive.
 
 | Variable                                                                           | Value                                                                                               |
 | ---------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------- |
-| `DATABASE_URL`                                                                     | The staging database's pooled connection string                                                     |
-| `DATABASE_URL_UNPOOLED`                                                            | Its direct/session string (migrations only)                                                         |
+| `DATABASE_URL`                                                                     | `lodge_app` transaction-mode (port 6543) string (§5)                                                |
+| `DATABASE_SCHEMA`                                                                  | `lodge`                                                                                             |
+| `DATABASE_URL_UNPOOLED`                                                            | `lodge_app` session-mode (port 5432) string (migrations only)                                       |
 | `SITE_URL`                                                                         | The branch address above (no trailing slash): Stripe returns guests here                            |
 | `BOOKING_PREVIEW`                                                                  | `true`                                                                                              |
 | `PROPERTY_SLUG`                                                                    | `lodge-on-the-lake`                                                                                 |
@@ -106,18 +111,31 @@ Previews are behind Vercel Authentication. Keep it on.
 
 ## 5. Database, demo data, owner account and webhook (operator's machine)
 
+1. In the Supabase dashboard (project `lsllodge`) → SQL editor, give the
+   Lodge role a password **you** generate (never in chat or git):
+
+   ```sql
+   ALTER ROLE lodge_app WITH PASSWORD '<from your password manager>';
+   ```
+
+2. Connection strings use the user `lodge_app.sqkpixwvugrxllrxlexs` on the
+   Supavisor pooler shown in Connect: **session mode, port 5432** for
+   migrations and these commands; **transaction mode, port 6543** for the
+   app's `DATABASE_URL` on Vercel.
+
 Run from a checkout of the branch, with the variables in your shell only
 (not in a file in the repository):
 
 ```bash
-export DATABASE_URL='<staging unpooled string>'   # migrations want unpooled
+export DATABASE_SCHEMA=lodge
+export DATABASE_URL='<lodge_app session-mode string>'
 export DATABASE_URL_UNPOOLED="$DATABASE_URL"
 export DEMO_DATABASE_HOST='<that string's host>'    # confirms "this is the demo DB"
 export SITE_URL='https://lsllodge-git-claude-instant-booking-fystay1.vercel.app'
 export CREDENTIALS_ENCRYPTION_KEY='<same value as on Vercel>'
 
-pnpm db:migrate                 # committed migrations, additive only
-pnpm db:verify                  # RLS, roles, triggers and constraints
+pnpm db:migrate                 # applies 0002–0010 in schema lodge
+pnpm db:verify                  # RLS, roles, triggers and constraints (in lodge)
 pnpm demo seed                  # placeholder property, prices and payment plan;
                                 # marks the database as a demo database
 pnpm admin invite --email <owner's email>   # prints a one-time set-up link
@@ -145,22 +163,25 @@ signing secret once, to your terminal only. Put it in Vercel as
 
 ## 6. Scheduled jobs on staging
 
-Vercel Cron runs on production deployments only, so staging has no timer.
-**The demo doesn't need one:** an expired hold is treated as expired the
-moment anyone looks at it, refunds are sent straight away when the owner
-records a cancellation, and email is off. To run the jobs by hand, use
-"Run now" in `/admin/system`. For a staging soak, either:
+Vercel Cron runs on production deployments only (and only daily on the free
+Hobby plan), so staging uses **Supabase `pg_cron` + `pg_net`** (free):
+[scripts/staging-scheduler.sql](../scripts/staging-scheduler.sql) calls
+`/api/jobs/tick` every 5 minutes with the cron secret and the Vercel bypass
+header, both read from Supabase Vault (you store them; the file has no
+secrets). Jobs: expire holds, send notifications, process refunds,
+**reconcile payments with Stripe** (catches missed webhooks), sync
+calendars, maintenance, **data retention**. Check runs in `/admin/system`.
 
-- Supabase `pg_cron` + `pg_net` calling `/api/jobs/tick` every 5 minutes
-  with the cron secret and the bypass header (both from Supabase Vault), or
-- an external scheduler that can send both headers.
+The demo doesn't depend on it: an expired hold is treated as expired the
+moment anyone looks at it, and refunds are sent straight away when the
+owner records a cancellation.
 
 ## 7. Check it end to end
 
 ```bash
 STAGING_E2E=true STAGING_STRIPE=true \
 E2E_BASE_URL="$SITE_URL" \
-DATABASE_URL='<staging string>' DEMO_DATABASE_HOST='<host>' \
+DATABASE_SCHEMA=lodge DATABASE_URL='<lodge_app session string>' DEMO_DATABASE_HOST='<host>' \
 VERCEL_AUTOMATION_BYPASS_SECRET='…' \
 STRIPE_SECRET_KEY='sk_test_…' STRIPE_WEBHOOK_SECRET='whsec_…' \
 pnpm test:e2e e2e/staging-journey.spec.ts --project desktop
