@@ -55,6 +55,9 @@ test("a confirmed booking shows its deadline and 'contact the owner to cancel'; 
       SET status = 'CONFIRMED', hold_expires_at = NULL,
           confirmed_at = now(), free_cancellation_until = now() + interval '24 hours'
       WHERE public_ref = ${ref}`;
+    await sql`
+      UPDATE payment_schedule_items SET status = 'PAID', paid_minor = amount_minor
+      WHERE reservation_id = (SELECT id FROM reservations WHERE public_ref = ${ref})`;
   } finally {
     await sql.end();
   }
@@ -65,6 +68,10 @@ test("a confirmed booking shows its deadline and 'contact the owner to cancel'; 
   await expect(
     status.getByRole("link", { name: "contact the owner" }),
   ).toHaveAttribute("href", "/contact");
+  // The price box shows the verified payment as paid (owner-approved).
+  const schedule = page.getByRole("complementary", { name: "Your stay" });
+  await expect(schedule).toContainText(/Full payment\s+paid/);
+  await expect(schedule).not.toContainText("due now");
   // No guest cancellation form.
   await expect(page.getByRole("button", { name: /cancel/i })).toHaveCount(0);
 

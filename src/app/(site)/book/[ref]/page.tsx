@@ -8,7 +8,7 @@ import { QuoteSummary } from "@/components/quote-summary";
 import { Container, PageHeader } from "@/components/ui";
 import { formatStayDate, todayInTimeZone, type IsoDate } from "@/lib/dates";
 import { privateRouteMetadata } from "@/lib/metadata";
-import { payments } from "@/server/db/schema";
+import { paymentScheduleItems, payments } from "@/server/db/schema";
 import { findReservationForGuest } from "@/server/booking/holds";
 import {
   formatDeadline,
@@ -98,6 +98,18 @@ async function HoldDetails({
   const paid = paymentRows.some(
     (p) => p.kind === "CHARGE" && p.status === "SUCCEEDED",
   );
+  // Schedule items the server has marked paid (only after verified payment).
+  const paidSequences = (
+    await ctx.db
+      .select({
+        sequence: paymentScheduleItems.sequence,
+        status: paymentScheduleItems.status,
+      })
+      .from(paymentScheduleItems)
+      .where(eq(paymentScheduleItems.reservationId, reservation.id))
+  )
+    .filter((item) => item.status === "PAID")
+    .map((item) => item.sequence);
 
   const now = new Date();
   const quote = reservation.quoteSnapshot as Quote;
@@ -209,7 +221,11 @@ async function HoldDetails({
           nights · {reservation.guests}{" "}
           {reservation.guests === 1 ? "guest" : "guests"}
         </p>
-        <QuoteSummary quote={quote} today={todayInTimeZone(timeZone, now)} />
+        <QuoteSummary
+          quote={quote}
+          today={todayInTimeZone(timeZone, now)}
+          paidSequences={paidSequences}
+        />
       </aside>
     </div>
   );

@@ -8,13 +8,20 @@ const purposeLabel = {
   BALANCE: "Balance",
 } as const;
 
-/** Itemised price and payment schedule. Every mandatory charge is shown. */
+/**
+ * Itemised price and payment schedule. Every mandatory charge is shown.
+ * `paidSequences` lists schedule items whose payment the server has
+ * verified; they read "paid" instead of a due date (owner-approved,
+ * October 2026). Without it the component renders exactly as before.
+ */
 export function QuoteSummary({
   quote,
   today,
+  paidSequences,
 }: {
   quote: Quote;
   today?: IsoDate;
+  paidSequences?: readonly number[];
 }) {
   const money = (minor: number) => formatMoney(minor, quote.currency);
   return (
@@ -64,9 +71,11 @@ export function QuoteSummary({
               <span>
                 {purposeLabel[item.purpose]}{" "}
                 <span className="text-ink-muted">
-                  {today && item.dueOn <= today
-                    ? "due now"
-                    : `due by ${formatStayDate(item.dueOn as IsoDate)}`}
+                  {paidSequences?.includes(item.sequence)
+                    ? "paid"
+                    : today && item.dueOn <= today
+                      ? "due now"
+                      : `due by ${formatStayDate(item.dueOn as IsoDate)}`}
                 </span>
               </span>
               <span className="tabular-nums">{money(item.amountMinor)}</span>

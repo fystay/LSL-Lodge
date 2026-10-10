@@ -19,6 +19,8 @@ in production.
 | `src/app/(site)/book/page.tsx`       | One sentence under "We only ask for what we need…", in that line's text style: "The 24-hour free-cancellation period starts once your payment is confirmed. After that, the booking is non-refundable."                                                                                                                                                                                                                                                                                                                                                                                       | Approved: the single explanation sentence on /book.                                                               |
 | `src/app/(site)/book/[ref]/page.tsx` | Production's page, with: (1) for a confirmed booking, "Status: confirmed. Your payment has been received.", the free-cancellation deadline (or that it has passed), and "To cancel, contact the owner (link to /contact). Your cancellation counts from when your message reaches us."; (2) production's "Payment isn't switched on yet" notice shown only when payments really aren't configured; (3) a lapsed hold that was paid isn't described as "nothing was charged". Same markup and classes as the page's existing paragraphs, `<strong>` and underlined link. No cancellation form. | Approved: minimal production-style status page with confirmed status, deadline and "contact the owner to cancel". |
 
+| `src/components/quote-summary.tsx` + `src/app/(site)/book/[ref]/page.tsx` | Payment schedule line reads "paid" instead of "due now" for items the server has marked paid (verified payment only). Same element and style; only the word changes. Without the new optional prop the component renders exactly as in production. | Approved 10 October 2026: "correct the paid booking price box". |
+
 Screenshots: [ui-review/](ui-review/) (`production-*` vs `branch-*`). The
 "held" page is the same as production's.
 
@@ -27,8 +29,7 @@ Screenshots: [ui-review/](ui-review/) (`production-*` vs `branch-*`). The
 `/`, `/stay`, `/location`, `/information`, `/contact`,
 `/cancellation-policy` (draft notice), `/terms`, `/privacy`,
 `/availability` (with and without a search), the guest details form, the
-site header, footer, navigation, hero and booking search, and
-`src/components/quote-summary.tsx` (restored to production).
+site header, footer, navigation, hero and booking search.
 `e2e/visual-regression.spec.ts` compares 11 public routes on desktop and
 mobile with baselines taken from production's commit and checked against
 the live site: 22/22 match.
@@ -51,11 +52,6 @@ the live site: 22/22 match.
   on a booking.
 - Removed: `src/app/(site)/book/[ref]/refresher.tsx` (part of the earlier
   status page; not in production).
-
-## Known wording to review (not changed, needs approval to change)
-
-- On the booking page after payment, the price box (production's component)
-  still says "Full payment due now" rather than "paid".
 
 ## Proposed cancellation policy text (not published)
 

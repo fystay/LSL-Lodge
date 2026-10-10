@@ -1,6 +1,6 @@
 # Launch readiness
 
-As of 10 October 2026 (after the switch to instant booking). **Not ready to launch**, by design: no
+As of 10 October 2026 (staging-readiness review). See also [STAGING-READINESS.md](STAGING-READINESS.md). **Not ready to launch**, by design: no
 live payments, no public bookings, no real emails, no production database,
 no scheduler configured. This page lists what is verified, what was only
 simulated, and what blocks launch.
@@ -10,8 +10,8 @@ simulated, and what blocks launch.
 | Check                                    | Result                                                                                                                                                                                             |
 | ---------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `pnpm format:check`, `lint`, `typecheck` | Pass                                                                                                                                                                                               |
-| `pnpm test` (unit)                       | 248 passed                                                                                                                                                                                         |
-| `pnpm test:integration`                  | 140 passed                                                                                                                                                                                         |
+| `pnpm test` (unit)                       | 249 passed                                                                                                                                                                                         |
+| `pnpm test:integration`                  | 145 passed                                                                                                                                                                                         |
 | `pnpm build`                             | Pass                                                                                                                                                                                               |
 | `pnpm test:e2e`, booking engine off      | 67 passed (booking/admin-only tests skipped)                                                                                                                                                       |
 | `pnpm test:e2e`, booking engine on       | 99 passed, 7 skipped (5 layout-specific, 2 Stripe sandbox needing keys)                                                                                                                            |

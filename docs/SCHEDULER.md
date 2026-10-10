@@ -127,3 +127,27 @@ longer overdue (a real failed-email problem from earlier test data was
 correctly reported); wrong health secret → 401. Integration tests cover
 overlap, crashed leases, timeouts, failures, abandoned runs, cadence,
 health and per-source leases.
+
+## Soak test (10 October 2026)
+
+Production build on a local database, a timer calling `/api/jobs/tick`
+every 60 seconds for 11 minutes (as a hosted scheduler would), plus a
+second simultaneous call at the start:
+
+- Unauthenticated tick → 401. Health before any run → 503 with all five
+  jobs overdue; after → 200 `{"ok":true,"problems":[]}`.
+- `expire-holds`, `send-notifications`, `process-refunds` and
+  `sync-calendars` each ran exactly every 4–5 minutes (07:52, 07:56,
+  08:00); `maintenance` once (hourly). Zero overlapping runs; the
+  simultaneous call was refused for the jobs already running ("lease
+  held").
+- A seeded lapsed hold was expired on the first run.
+
+Not covered by the soak: refund retries against Stripe (no Stripe key in
+this environment; covered by integration tests with a simulated gateway)
+and Airbnb polling (no feed link; covered by integration tests with
+synthetic feeds).
+
+**Still not configured anywhere:** a hosted trigger (Option A or B above).
+Option A needs the Supabase project; Option B needs a deployment. Both
+await owner decisions.

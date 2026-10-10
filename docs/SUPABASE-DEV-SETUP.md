@@ -5,9 +5,15 @@ two projects, both holding another application's tables and data (for
 example `Booking`, `User`, `_prisma_migrations`). Neither may be used for
 Lodge on the Lake, and nothing has been run against them.
 
-Creating a project is an account decision for the owner: it may need a paid
-plan (Supabase limits free active projects, and this organisation already
-has two; check Supabase's current pricing page).
+**Tried 10 October 2026:** creating `lodge-on-the-lake-dev` (eu-west-2) in
+the FYStay organisation was refused by Supabase: the owner account has
+reached the free plan's limit of 2 active projects. To proceed, the owner
+chooses one of: upgrade the organisation (a cost), pause or delete one of
+the other app's projects (their decision; not done here), or create a
+separate organisation under another account. Until then, development and
+tests run against local PostgreSQL 16 with Supabase's `anon` and
+`authenticated` roles reproduced (see `tests/support/integration-setup.ts`);
+Supabase runs PostgreSQL 17, and nothing used is version-specific.
 
 ## 1. Create the project (owner, in the Supabase dashboard)
 

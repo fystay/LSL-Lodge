@@ -79,13 +79,24 @@ domain doesn't depend on one vendor. No provider has been chosen.
 - **Health**: working / failing / out of date (no success within 60 minutes),
   last success, last attempt, imported period count, failure count and a
   plain-language error. After 3 consecutive failures the owner gets one alert
-  per outage. Guests see a short "running behind" note on the availability
-  page while any import is failing or stale. With instant booking there is
-  no owner approval step, so the remaining safety nets are the re-checks at
-  checkout and at payment (an imported period overlapping by then sends the
-  paid booking to owner review instead of confirming it) and the conflict
-  alert after confirmation. Whether to stop taking bookings while a feed is
-  stale is an open owner decision (docs/OWNER-DECISIONS.md).
+  per outage.
+- **Safety stop when data is stale (default since 10 October 2026).** An
+  enabled import that has never synced, or has had no success within its
+  stale window (60 minutes by default), means Airbnb bookings may be
+  missing. While that is true: no new holds are taken (the guest sees the
+  form's existing "Online booking isn't available right now"), Checkout
+  isn't started, and a payment that arrives goes to the owner for review
+  (`CALENDAR_STALE`) instead of confirming. The dates stay held and the
+  money recorded; the owner checks Airbnb and confirms or cancels and
+  refunds. One failed poll with a recent success doesn't trigger it.
+  Existing confirmed bookings are never changed. Code:
+  `staleImportSources` in `src/server/calendar/sync.ts`; tests in
+  `holds.integration.test.ts` and `payments.integration.test.ts`. With no
+  Airbnb source configured there is nothing to check, so connecting the
+  Airbnb feed is a launch blocker.
+- **Clashes after confirmation**: an Airbnb booking that appears over a
+  confirmed website booking is listed under "Clashes to resolve" and
+  alerted; neither record is changed.
 - **Export** (`/calendar/<token>.ics`): website bookings, live holds and
   owner blocks as "Not available". Imported periods are never exported, so
   Airbnb and the site can't echo each other. The token is an HMAC under

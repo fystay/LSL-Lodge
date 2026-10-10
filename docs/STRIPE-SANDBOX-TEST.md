@@ -6,10 +6,40 @@ automated tests against signed synthetic events and an in-memory gateway
 (`src/server/payments/payments.integration.test.ts`), but not yet against
 Stripe itself.
 
+## API-level check against Stripe (10 October 2026)
+
+Without app keys, the connected Stripe login was used to check our requests
+against Stripe's real test API:
+
+- A Checkout Session created with exactly the app's parameters
+  (`checkoutSessionParams`) was **accepted**, including the policy message
+  beside the pay button. It was paid on Stripe's hosted page with the 4242
+  test card, then refunded with the app's refund parameters (**accepted**,
+  `succeeded`).
+- The real `checkout.session.completed` and `refund.updated` payloads are
+  saved in `tests/fixtures/stripe/` and run through the real webhook path
+  (`stripe-fixtures.integration.test.ts`): the booking confirms and the
+  refund completes.
+- **Found: Adaptive Pricing.** The account had Stripe's Adaptive Pricing on,
+  so Checkout offered the guest US$702.08 (incl. a 4% conversion fee)
+  instead of £510.00. Our amount check still matched (Stripe reports the
+  GBP amount), but a "full refund" in GBP could give a guest back a
+  different amount in their currency. The app now sends
+  `adaptive_pricing: { enabled: false }` on every session.
+- **Found: API version.** The account's default webhook API version is
+  `2026-08-26.dahlia`; the app's SDK uses `2026-09-30`. Create the Lodge's
+  webhook endpoint with the SDK's version.
+- **Found: the "FYStay sandbox" is not the Lodge's.** It belongs to another
+  FYStay application ("FYStay Preview") and has that app's webhook
+  endpoints, so these test events were also delivered to that app's
+  preview deployment (test mode only; placeholder IDs and an example.test
+  email). Stopped there. **The Lodge needs its own Stripe sandbox (or
+  account)** before the scenarios below are run.
+
 ## Prerequisites (owner/developer; keys never go in chat or git)
 
-1. Confirm which Stripe account is the Lodge's (the connected login shows
-   "FYStay" and "FYStay sandbox"). Use a **sandbox or test mode**.
+1. Create a **dedicated sandbox for the Lodge** (Stripe dashboard →
+   sandboxes). Don't use "FYStay sandbox": it belongs to another app.
 2. Developers → API keys → copy the **test** secret key (`sk_test_…`) into
    the environment: `.env.local` locally, or the hosting provider's
    Preview/Development environment. The app refuses `sk_live_` keys unless

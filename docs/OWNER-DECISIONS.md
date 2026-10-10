@@ -24,15 +24,17 @@ Facts gathered so far, with sources: [property-facts-and-policies.md](property-f
 
 ## Blocking test-mode payments and email (accounts)
 
-- [ ] **Supabase project for the Lodge.** The connected Supabase account has
-      two projects (one named "fystay-preview", one with a personal default name), both
-      holding another application's tables and data. We did not touch them.
-      Please create a dedicated project (EU/UK region), or confirm one may be
-      used. Pricing tier and backups (PITR) to confirm.
-- [ ] **Stripe.** The connected Stripe login shows "FYStay" (live and test)
-      and "FYStay sandbox". Confirm which account the Lodge should use, then
+- [ ] **Supabase project for the Lodge.** Creating `lodge-on-the-lake-dev`
+      was tried on 10 October 2026 and refused: your account is at the free
+      plan's limit of 2 active projects (both belong to another app and were
+      not touched). Choose: upgrade the organisation (a cost), pause/delete
+      one of those projects, or use a separate organisation. Pricing tier
+      and backups (PITR) to confirm.
+- [ ] **Stripe.** "FYStay sandbox" belongs to another app (it has that app's
+      webhooks). Create a **dedicated Stripe sandbox for the Lodge**, then
       put its **test** secret key and webhook signing secret in the hosting
-      secret manager. Live mode stays off until you approve it.
+      secret manager (never in chat or git). Live mode stays off until you
+      approve it.
 - [ ] **Resend** (or another provider), a sending domain, and DNS access for
       SPF, DKIM and DMARC. Real guest emails stay off until you approve them.
 - [ ] **Admin users**: who gets an account (owner, and any read-only
@@ -49,8 +51,7 @@ Facts gathered so far, with sources: [property-facts-and-policies.md](property-f
       cancellations in `/admin`.
 - [ ] **Cancellation policy page**: still the draft notice; proposed text
       in [FRONTEND-CHANGES.md](FRONTEND-CHANGES.md).
-- [ ] **"Full payment due now" after payment**: production's price box
-      keeps saying "due now" on a paid booking. Change it to "paid"?
+- [x] **"Paid" in the price box after payment** (approved and done).
 - [ ] **A guest self-cancel form** (optional, later): the backend supports
       it; not added without your approval.
 
@@ -69,10 +70,10 @@ Facts gathered so far, with sources: [property-facts-and-policies.md](property-f
       processing fee is absorbed on 24-hour refunds (today the guest gets
       everything back). Legal review recommended, including whether the
       24-hour policy needs wording for UK consumer law.
-- [ ] **Stale Airbnb feed**: with no approval step, should online booking
-      pause automatically while the Airbnb import is failing or out of date?
-      (Today guests see a "running behind" note and bookings continue; a
-      clash found at payment goes to you for review.)
+- [ ] **Stale Airbnb feed (default set, confirm):** while the Airbnb import
+      has had no successful sync for 60 minutes, the site takes no new
+      bookings and any payment that arrives waits for your review. Confirm,
+      or choose a different window.
 - [ ] **Booking terms** (legal review recommended).
 - [ ] **Guest data**: name and email by default; phone optional. Anything
       else (address, age of lead guest)?
