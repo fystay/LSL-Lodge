@@ -142,7 +142,7 @@ export const TEMPLATES: Record<
         { list: stayLines(d) },
         d.freeCancellationUntil
           ? {
-              p: `Cancellation: you can cancel for a full refund before ${d.freeCancellationUntil} (UK time), 24 hours after your payment was confirmed. After that the booking is non-refundable. You can cancel from your booking page.`,
+              p: `Cancellation: you can cancel for a full refund before ${d.freeCancellationUntil} (UK time), 24 hours after your payment was confirmed. After that the booking is non-refundable. To cancel, contact us through the contact page on our website; your cancellation counts from when your message reaches us.`,
             }
           : { p: "Cancellation: see the cancellation policy below." },
         bookingLink(d, "View or cancel your booking"),

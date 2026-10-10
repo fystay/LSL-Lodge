@@ -9,13 +9,15 @@ import {
   type OwnerBlockResult,
 } from "@/server/booking/holds";
 import {
+  guestCancel,
   cancelByOwner,
   confirmReviewedBooking,
   markFlagResolved,
 } from "@/server/booking/resolution";
 import { expireSessions } from "@/server/payments/checkout";
 import { getPaymentGateway } from "@/server/payments/gateway";
-import { issueRefund } from "@/server/payments/refunds";
+import { issueRefund, sendRefund } from "@/server/payments/refunds";
+import { zonedLocalTimeToUtc } from "@/lib/dates";
 import { addIcalSource, syncIcalSource } from "@/server/calendar/sync";
 import { calendarSources, setCalendarSourceEnabled } from "@/server/admin/data";
 import { requireAdmin } from "@/server/admin/auth";
@@ -191,6 +193,62 @@ export async function cancelBookingAction(form: FormData) {
     saved: result.paid
       ? "Cancelled and the dates released. Money was paid: decide on any refund below."
       : "Cancelled and the dates released. Nothing had been paid.",
+  });
+}
+
+/**
+ * Records a cancellation the guest asked for (by email, phone or the contact
+ * form). The 24-hour policy is applied to when the request reached the
+ * owner, entered here in UK time; a full refund is queued automatically if
+ * it arrived strictly before the free-cancellation deadline.
+ */
+export async function cancelAtGuestRequestAction(form: FormData) {
+  const id = uuid(form.get("id"));
+  if (!id) back("/admin/bookings", { error: "Unknown booking." });
+  const path = `/admin/bookings/${id}`;
+  const ctx = await ready(path, true);
+  if (form.get("confirm") !== "yes")
+    back(path, {
+      error: "Tick the box to confirm the guest asked to cancel.",
+    });
+  const receivedAt = zonedLocalTimeToUtc(
+    String(form.get("receivedAt") ?? ""),
+    ctx.property.timeZone,
+  );
+  if (!receivedAt)
+    back(path, {
+      error: "Enter when the guest's request reached you (date and time).",
+    });
+  const result = await guestCancel(ctx.db, {
+    propertyId: ctx.property.id,
+    reservationId: id,
+    receivedAt,
+    // The guest asked to cancel; the owner confirms that here.
+    acknowledgeNoRefund: true,
+    recordedBy: { actor: ctx.admin.email, at: new Date() },
+  });
+  if (!result.ok)
+    back(path, {
+      error:
+        result.reason === "INVALID_RECEIVED_TIME"
+          ? "That time is in the future or before the booking was made."
+          : result.reason === "PAYMENT_PROCESSING"
+            ? "A payment is still being processed. Try again once it settles."
+            : "This booking can't be cancelled from here.",
+    });
+  const gateway = getPaymentGateway();
+  if (result.outcome === "HOLD_RELEASED" && gateway)
+    await expireSessions(gateway, result.openSessions);
+  if (result.outcome === "CANCELLED_WITH_REFUND" && gateway)
+    for (const refundId of result.refundIds)
+      await sendRefund(ctx.db, gateway, refundId).catch(() => undefined);
+  back(path, {
+    saved:
+      result.outcome === "CANCELLED_WITH_REFUND"
+        ? "Cancelled at the guest's request, within 24 hours of confirmation: a full refund has been started. It is complete only when Stripe confirms it."
+        : result.outcome === "CANCELLED_NO_REFUND"
+          ? "Cancelled at the guest's request, after the 24-hour period: no refund is due under the policy."
+          : "The unpaid hold was released at the guest's request.",
   });
 }
 

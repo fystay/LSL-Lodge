@@ -1,5 +1,5 @@
 import "server-only";
-import { and, eq, inArray, ne } from "drizzle-orm";
+import { and, eq, inArray, ne, sql } from "drizzle-orm";
 import type { IsoDate } from "@/lib/dates";
 import type { Database, Transaction } from "@/server/db/client";
 import {
@@ -277,12 +277,21 @@ export type GuestCancelResult =
   | {
       ok: false;
       reason:
-        "NOT_FOUND" | "NOT_ALLOWED" | "PAYMENT_PROCESSING" | "ACK_REQUIRED";
+        | "NOT_FOUND"
+        | "NOT_ALLOWED"
+        | "PAYMENT_PROCESSING"
+        | "ACK_REQUIRED"
+        | "INVALID_RECEIVED_TIME";
     };
 
 /**
- * The guest cancels from their booking page, under the host's policy
- * (src/server/booking/cancellation-policy.ts):
+ * A guest's cancellation, under the host's policy
+ * (src/server/booking/cancellation-policy.ts). Guests ask the owner to
+ * cancel (the booking page says "contact the owner"); the owner records it
+ * with `recordedBy` and the time the guest's request reached them
+ * (`receivedAt`, e.g. the time on their email). Eligibility is decided by
+ * that time, never by when the owner gets round to recording it. The
+ * received time can't be in the future or before the booking was made.
  *
  * - An unpaid hold is simply released.
  * - A paid booking cancelled STRICTLY BEFORE `freeCancellationUntil`
@@ -302,13 +311,25 @@ export async function guestCancel(
     propertyId: string;
     reservationId: string;
     acknowledgeNoRefund?: boolean;
+    /** When the guest's cancellation request reached us. */
     receivedAt?: Date;
+    /** Set when the owner records a cancellation the guest asked for. */
+    recordedBy?: { actor: string; at: Date };
   },
 ): Promise<GuestCancelResult> {
-  const now = input.receivedAt ?? new Date();
+  const now = input.receivedAt ?? input.recordedBy?.at ?? new Date();
+  const actionAt = input.recordedBy?.at ?? now;
+  const actor = input.recordedBy?.actor ?? null;
   return db.transaction(async (tx) => {
     const r = await lock(tx, input.propertyId, input.reservationId);
     if (!r) return { ok: false, reason: "NOT_FOUND" } as const;
+    if (
+      input.recordedBy &&
+      (now.getTime() > actionAt.getTime() ||
+        // Owners enter times to the minute, so compare at that precision.
+        now.getTime() < Math.floor(r.requestedAt.getTime() / 60_000) * 60_000)
+    )
+      return { ok: false, reason: "INVALID_RECEIVED_TIME" } as const;
     const processing = await tx
       .select({ id: payments.id })
       .from(payments)
@@ -342,7 +363,7 @@ export async function guestCancel(
         .update(reservations)
         .set({
           status: "CANCELLED",
-          cancelledAt: now,
+          cancelledAt: actionAt,
           cancelledBy: "GUEST",
           holdExpiresAt: null,
         })
@@ -355,8 +376,9 @@ export async function guestCancel(
           and(eq(payments.reservationId, r.id), eq(payments.status, "PENDING")),
         )
         .returning({ sessionId: payments.stripeCheckoutSessionId });
-      await audit(tx, "reservation.hold_released_by_guest", r.id, null, {
+      await audit(tx, "reservation.hold_released_by_guest", r.id, actor, {
         previousStatus: r.status,
+        ...(actor ? { recordedForGuest: true } : {}),
       });
       return {
         ok: true,
@@ -378,7 +400,7 @@ export async function guestCancel(
       .update(reservations)
       .set({
         status: "CANCELLED",
-        cancelledAt: now,
+        cancelledAt: actionAt,
         cancelledBy: "GUEST",
         holdExpiresAt: null,
       })
@@ -387,16 +409,29 @@ export async function guestCancel(
     const refund = eligible
       ? await queueFullRefund(tx, r.id, "GUEST_POLICY", now)
       : { refundIds: [], totalMinor: 0 };
-    await audit(tx, "reservation.cancelled_by_guest", r.id, null, {
-      receivedAt: now.toISOString(),
-      freeCancellationUntil: r.freeCancellationUntil?.toISOString() ?? null,
-      refundEligible: eligible,
-      refundMinor: refund.totalMinor,
-    });
-    await enqueueForReservation(tx, r.id, [
-      "guest_cancellation_confirmed",
-      "owner_guest_cancelled",
-    ]);
+    await audit(
+      tx,
+      actor
+        ? "reservation.cancelled_at_guest_request"
+        : "reservation.cancelled_by_guest",
+      r.id,
+      actor,
+      {
+        receivedAt: now.toISOString(),
+        ...(actor ? { recordedAt: actionAt.toISOString() } : {}),
+        freeCancellationUntil: r.freeCancellationUntil?.toISOString() ?? null,
+        refundEligible: eligible,
+        refundMinor: refund.totalMinor,
+      },
+    );
+    // The owner recorded it themselves, so only the guest is told.
+    await enqueueForReservation(
+      tx,
+      r.id,
+      actor
+        ? ["guest_cancellation_confirmed"]
+        : ["guest_cancellation_confirmed", "owner_guest_cancelled"],
+    );
     return eligible
       ? ({
           ok: true,
@@ -405,5 +440,88 @@ export async function guestCancel(
           refundMinor: refund.totalMinor,
         } as const)
       : ({ ok: true, outcome: "CANCELLED_NO_REFUND" } as const);
+  });
+}
+
+/**
+ * Releases an unpaid hold straight away when the guest can't continue to
+ * payment: Stripe Checkout couldn't be opened, or the guest left Stripe's
+ * page ("back"). Without this their own hold would block the same dates
+ * for up to 30 minutes, and the booking page has no "pay again" button.
+ *
+ * Only a PENDING_PAYMENT hold with no payment received or being processed
+ * is released. For a guest leaving Checkout, `paymentId` must be the
+ * payment attempt that sent them there (it is in Stripe's cancel link and
+ * isn't guessable), so a third-party link can't release someone's hold.
+ * Idempotent.
+ */
+export async function releaseHoldBeforePayment(
+  db: Database,
+  input: {
+    propertyId: string;
+    reservationId: string;
+    cause: "CHECKOUT_UNAVAILABLE" | "GUEST_LEFT_CHECKOUT";
+    paymentId?: string;
+    now?: Date;
+  },
+): Promise<{ released: boolean; openSessions: string[] }> {
+  const now = input.now ?? new Date();
+  return db.transaction(async (tx) => {
+    const r = await lock(tx, input.propertyId, input.reservationId);
+    if (!r || r.status !== "PENDING_PAYMENT")
+      return { released: false, openSessions: [] };
+    const rows = await tx
+      .select()
+      .from(payments)
+      .where(eq(payments.reservationId, r.id));
+    if (
+      input.paymentId &&
+      !rows.some((p) => p.id === input.paymentId && p.kind === "CHARGE")
+    )
+      return { released: false, openSessions: [] };
+    if (rows.some((p) => p.status === "SUCCEEDED" || p.status === "PROCESSING"))
+      return { released: false, openSessions: [] };
+
+    await tx
+      .update(reservations)
+      .set({
+        status: "CANCELLED",
+        cancelledAt: now,
+        cancelledBy: input.cause === "GUEST_LEFT_CHECKOUT" ? "GUEST" : "SYSTEM",
+        holdExpiresAt: null,
+        // Retire the form's idempotency key so trying again from the same
+        // page creates a fresh hold instead of replaying this one.
+        idempotencyKey: sql`${reservations.idempotencyKey} || ':released'`,
+      })
+      .where(eq(reservations.id, r.id));
+    await tx
+      .update(paymentScheduleItems)
+      .set({ status: "CANCELLED" })
+      .where(
+        and(
+          eq(paymentScheduleItems.reservationId, r.id),
+          ne(paymentScheduleItems.status, "PAID"),
+        ),
+      );
+    const open = await tx
+      .update(payments)
+      .set({ status: "CANCELED" })
+      .where(
+        and(eq(payments.reservationId, r.id), eq(payments.status, "PENDING")),
+      )
+      .returning({ sessionId: payments.stripeCheckoutSessionId });
+    await tx.insert(auditLogs).values({
+      actorType: input.cause === "GUEST_LEFT_CHECKOUT" ? "GUEST" : "SYSTEM",
+      action: "reservation.hold_released_before_payment",
+      targetType: "reservation",
+      targetId: r.id,
+      metadata: { cause: input.cause },
+    });
+    return {
+      released: true,
+      openSessions: open
+        .map((o) => o.sessionId)
+        .filter((s): s is string => Boolean(s)),
+    };
   });
 }

@@ -208,7 +208,9 @@ export async function startCheckout(
       description: `Lodge on the Lake: ${r.checkIn} to ${r.checkOut} (${r.publicRef})`,
       customerEmail: r.guestEmail,
       successUrl: `${refPath}?payment=returned&session_id={CHECKOUT_SESSION_ID}`,
-      cancelUrl: `${refPath}?payment=cancelled`,
+      // Leaving Stripe's page releases the hold (the payment ID proves the
+      // link came from this checkout): see book/[ref]/checkout-cancelled.
+      cancelUrl: `${refPath}/checkout-cancelled?p=${payment.id}`,
       expiresAt: payment.checkoutExpiresAt!,
       // Shown beside Stripe's pay button. The deadline only exists once the
       // payment is confirmed, so none is quoted here.

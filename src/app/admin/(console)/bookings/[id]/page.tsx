@@ -21,6 +21,7 @@ import { refundEligible } from "@/server/booking/cancellation-policy";
 import { penceToPounds } from "@/server/admin/schemas";
 import type { Quote } from "@/server/pricing/quote";
 import {
+  cancelAtGuestRequestAction,
   cancelBookingAction,
   confirmReviewedAction,
   refundAction,
@@ -171,8 +172,9 @@ async function Detail({
         <div className="mt-6">
           <AdminSection id="actions" title="Resolve, cancel or refund">
             <p className="text-sm text-ink-muted">
-              These actions ask for a fresh authenticator code. Refund amounts
-              are your decision: nothing is calculated from a policy.
+              These actions ask for a fresh authenticator code. A cancellation
+              the guest asked for follows the 24-hour policy automatically; any
+              other refund amount is your decision.
             </p>
             <div className="mt-4 grid gap-6 md:grid-cols-2">
               {r.status === "REQUIRES_REVIEW" && (
@@ -195,7 +197,7 @@ async function Detail({
                 <form action={cancelBookingAction} className="space-y-3">
                   <input type="hidden" name="id" value={r.id} />
                   <h3 className="font-sans text-base font-semibold">
-                    Cancel the booking
+                    Cancel the booking (your decision)
                   </h3>
                   <label
                     htmlFor="cancel-note"
@@ -221,6 +223,47 @@ async function Detail({
                   </label>
                   <button type="submit" className={smallButton}>
                     Cancel booking
+                  </button>
+                </form>
+              )}
+              {["CONFIRMED", "PAYMENT_DUE", "PENDING_PAYMENT"].includes(
+                r.status,
+              ) && (
+                <form action={cancelAtGuestRequestAction} className="space-y-3">
+                  <input type="hidden" name="id" value={r.id} />
+                  <h3 className="font-sans text-base font-semibold">
+                    The guest asked to cancel
+                  </h3>
+                  <p className="text-sm">
+                    Guests cancel by contacting you. Enter when their request
+                    reached you (UK time, e.g. the time on their email). If that
+                    is before the free-cancellation deadline, everything they
+                    paid is refunded automatically; otherwise no refund is due.
+                  </p>
+                  <label
+                    htmlFor="guest-request-at"
+                    className="block text-sm font-semibold"
+                  >
+                    Request received (UK time)
+                  </label>
+                  <input
+                    id="guest-request-at"
+                    name="receivedAt"
+                    type="datetime-local"
+                    required
+                    className={inputClass}
+                  />
+                  <label className="flex min-h-11 items-center gap-3">
+                    <input
+                      type="checkbox"
+                      name="confirm"
+                      value="yes"
+                      className="size-5"
+                    />
+                    <span>Yes, the guest asked to cancel this booking</span>
+                  </label>
+                  <button type="submit" className={smallButton}>
+                    Cancel at guest&rsquo;s request
                   </button>
                 </form>
               )}

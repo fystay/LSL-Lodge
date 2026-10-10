@@ -15,6 +15,7 @@ import {
   confirmReviewedBooking,
   guestCancel,
   markFlagResolved,
+  releaseHoldBeforePayment,
 } from "@/server/booking/resolution";
 import { FakeGateway } from "../../../tests/support/fake-gateway";
 import {
@@ -624,5 +625,212 @@ describe("guest cancellation under the 24-hour policy", () => {
       ok: false,
       reason: "NOT_ALLOWED",
     });
+  });
+});
+
+describe("cancellation the guest asked for, recorded by the owner", () => {
+  const OWNER_EMAIL = "owner@example.test";
+  const record = (
+    propertyId: string,
+    reservationId: string,
+    receivedAt: Date,
+    recordedAt: Date,
+  ) =>
+    guestCancel(db, {
+      propertyId,
+      reservationId,
+      receivedAt,
+      acknowledgeNoRefund: true,
+      recordedBy: { actor: OWNER_EMAIL, at: recordedAt },
+    });
+  const refunds = (reservationId: string) =>
+    db
+      .select()
+      .from(payments)
+      .where(eq(payments.reservationId, reservationId))
+      .then((rows) => rows.filter((p) => p.kind === "REFUND"));
+
+  it("refunds in full when the request arrived 1 ms before the deadline, even if recorded later", async () => {
+    const { property, reservationId } = await paidBooking();
+    const received = new Date(DEADLINE.getTime() - 1);
+    const recorded = new Date(DEADLINE.getTime() + 6 * HOUR);
+    expect(
+      await record(property.id, reservationId, received, recorded),
+    ).toMatchObject({ ok: true, outcome: "CANCELLED_WITH_REFUND" });
+    expect((await refunds(reservationId)).map((p) => p.amountMinor)).toEqual([
+      30_000,
+    ]);
+    const r = await load(reservationId);
+    expect([r.cancelledBy, r.cancelledAt?.toISOString()]).toEqual([
+      "GUEST",
+      recorded.toISOString(),
+    ]);
+    const [entry] = await db
+      .select()
+      .from(auditLogs)
+      .where(eq(auditLogs.action, "reservation.cancelled_at_guest_request"));
+    expect(entry.actorId).toBe(OWNER_EMAIL);
+    expect(entry.metadata).toMatchObject({
+      receivedAt: received.toISOString(),
+      recordedAt: recorded.toISOString(),
+      freeCancellationUntil: DEADLINE.toISOString(),
+      refundEligible: true,
+    });
+    // The guest is told; the owner, who recorded it, isn't emailed.
+    const t = await templates(reservationId);
+    expect(t).toContain("guest_cancellation_confirmed");
+    expect(t).not.toContain("owner_guest_cancelled");
+  });
+
+  for (const [label, offset] of [
+    ["exactly at", 0],
+    ["1 ms after", 1],
+  ] as const)
+    it(`gives no refund when the request arrived ${label} the deadline`, async () => {
+      const { property, reservationId } = await paidBooking();
+      const received = new Date(DEADLINE.getTime() + offset);
+      expect(
+        await record(
+          property.id,
+          reservationId,
+          received,
+          new Date(received.getTime() + HOUR),
+        ),
+      ).toEqual({ ok: true, outcome: "CANCELLED_NO_REFUND" });
+      expect(await refunds(reservationId)).toHaveLength(0);
+      expect((await load(reservationId)).status).toBe("CANCELLED");
+    });
+
+  it("refuses a received time in the future or before the booking was made", async () => {
+    const { property, reservationId } = await paidBooking();
+    const recorded = new Date(NOW.getTime() + 2 * HOUR);
+    expect(
+      await record(
+        property.id,
+        reservationId,
+        new Date(recorded.getTime() + 1),
+        recorded,
+      ),
+    ).toEqual({ ok: false, reason: "INVALID_RECEIVED_TIME" });
+    expect(
+      await record(
+        property.id,
+        reservationId,
+        new Date(NOW.getTime() - 1),
+        recorded,
+      ),
+    ).toEqual({ ok: false, reason: "INVALID_RECEIVED_TIME" });
+    expect((await load(reservationId)).status).toBe("CONFIRMED");
+  });
+
+  it("accepts a request time entered to the minute in which the booking was made", async () => {
+    // Booked at 12:00:30; the guest wrote at "12:00" (minute precision).
+    const property = await createBookableProperty(db);
+    const bookedAt = new Date(NOW.getTime() + 30_000);
+    const hold = await createHold(db, {
+      propertyId: property.id,
+      checkIn: d("2027-03-01"),
+      checkOut: d("2027-03-04"),
+      guests: 2,
+      guest: { name: "Test Guest", email: "guest@example.test" },
+      idempotencyKey: randomUUID(),
+      now: bookedAt,
+    });
+    if (!hold.ok) throw new Error("expected hold");
+    const gateway = new FakeGateway();
+    const paidAt = new Date(bookedAt.getTime() + 15_000);
+    await startCheckout(db, gateway, {
+      reservationId: hold.reservationId,
+      baseUrl: BASE,
+      now: paidAt,
+    });
+    await applyCheckoutSession(db, gateway.pay(gateway.latest().id), paidAt);
+    expect(
+      await record(
+        property.id,
+        hold.reservationId,
+        NOW,
+        new Date(NOW.getTime() + HOUR),
+      ),
+    ).toMatchObject({ ok: true, outcome: "CANCELLED_WITH_REFUND" });
+  });
+});
+
+describe("releasing a hold the guest can't pay for", () => {
+  it("releases at once when Checkout can't be opened, and a retry with the same form makes a fresh hold", async () => {
+    const property = await createBookableProperty(db);
+    const key = randomUUID();
+    const hold = () =>
+      createHold(db, {
+        propertyId: property.id,
+        checkIn: d("2027-03-01"),
+        checkOut: d("2027-03-04"),
+        guests: 2,
+        guest: { name: "Test Guest", email: "guest@example.test" },
+        idempotencyKey: key,
+        now: NOW,
+      });
+    const first = await hold();
+    if (!first.ok) throw new Error("expected hold");
+    expect(
+      await releaseHoldBeforePayment(db, {
+        propertyId: property.id,
+        reservationId: first.reservationId,
+        cause: "CHECKOUT_UNAVAILABLE",
+        now: NOW,
+      }),
+    ).toMatchObject({ released: true });
+    const r = await load(first.reservationId);
+    expect([r.status, r.cancelledBy]).toEqual(["CANCELLED", "SYSTEM"]);
+    const again = await hold();
+    expect(again).toMatchObject({ ok: true, replayed: false });
+    if (again.ok) expect(again.reservationId).not.toBe(first.reservationId);
+  });
+
+  it("releases when the guest leaves Checkout, only with that checkout's payment ID", async () => {
+    const property = await createBookableProperty(db);
+    const reservationId = await request(property.id);
+    const gateway = new FakeGateway();
+    await startCheckout(db, gateway, {
+      reservationId,
+      baseUrl: BASE,
+      now: NOW,
+    });
+    const [attempt] = await db
+      .select()
+      .from(payments)
+      .where(eq(payments.reservationId, reservationId));
+    // Stripe's "back" link carries this payment's ID.
+    expect(gateway.created[0].cancelUrl).toContain(
+      `/checkout-cancelled?p=${attempt.id}`,
+    );
+    const leave = (paymentId: string) =>
+      releaseHoldBeforePayment(db, {
+        propertyId: property.id,
+        reservationId,
+        cause: "GUEST_LEFT_CHECKOUT",
+        paymentId,
+      });
+    expect(await leave(randomUUID())).toMatchObject({ released: false });
+    expect((await load(reservationId)).status).toBe("PENDING_PAYMENT");
+    expect(await leave(attempt.id)).toEqual({
+      released: true,
+      openSessions: [gateway.latest().id],
+    });
+    expect(await leave(attempt.id)).toMatchObject({ released: false });
+    expect((await load(reservationId)).cancelledBy).toBe("GUEST");
+  });
+
+  it("never releases a booking that has been paid", async () => {
+    const { property, reservationId, charge } = await paidBooking();
+    expect(
+      await releaseHoldBeforePayment(db, {
+        propertyId: property.id,
+        reservationId,
+        cause: "GUEST_LEFT_CHECKOUT",
+        paymentId: charge.id,
+      }),
+    ).toMatchObject({ released: false });
+    expect((await load(reservationId)).status).toBe("CONFIRMED");
   });
 });
