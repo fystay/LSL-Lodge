@@ -1,5 +1,6 @@
 import { settleAnimations } from "./support";
 import { expect, test, type Page } from "@playwright/test";
+import postgres from "postgres";
 import { mintAdminSession } from "./admin-auth";
 
 /**
@@ -184,5 +185,40 @@ test("admin pages have no automatically detectable WCAG A/AA violations", async 
     expect(results.violations.map((v) => `${path} ${v.id}: ${v.help}`)).toEqual(
       [],
     );
+  }
+});
+
+test("the system page's problem list is accessible when something is wrong", async ({
+  page,
+}, info) => {
+  // Regression: the health problems list carried role="alert" on its <ul>,
+  // which strips list semantics from its <li> items (axe "listitem"). It
+  // only renders while health reports a problem, so the general sweep
+  // above caught it only intermittently. Force a problem deterministically.
+  const AxeBuilder = (await import("@axe-core/playwright")).default;
+  const sql = postgres(process.env.DATABASE_URL!, {
+    max: 1,
+    onnotice: () => {},
+  });
+  const eventId = `evt_a11y_${info.project.name}_${Date.now()}`;
+  try {
+    await sql`
+      INSERT INTO webhook_events (provider, provider_event_id, type, state)
+      VALUES ('stripe', ${eventId}, 'checkout.session.completed', 'FAILED')`;
+    await signIn(page);
+    await page.goto("/admin/system");
+    await settleAnimations(page);
+    const alert = page.getByRole("alert").filter({
+      hasText: "Some Stripe notifications failed to process",
+    });
+    await expect(alert).toBeVisible();
+    await expect(alert.getByRole("listitem").first()).toBeVisible();
+    const results = await new AxeBuilder({ page })
+      .withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa", "wcag22aa"])
+      .analyze();
+    expect(results.violations.map((v) => `${v.id}: ${v.help}`)).toEqual([]);
+  } finally {
+    await sql`DELETE FROM webhook_events WHERE provider_event_id = ${eventId}`;
+    await sql.end();
   }
 });

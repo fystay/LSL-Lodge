@@ -178,6 +178,20 @@ owner records a cancellation.
 
 ## 7. Check it end to end
 
+First, the read-only preflight. It lists what is still missing (variables,
+migrations, schema isolation, owner account, scheduler, Stripe sandbox and
+webhook, calendar feeds) and never prints a secret or writes anything:
+
+```bash
+vercel env pull --environment=preview --git-branch=claude/instant-booking /tmp/lodge-staging.env
+pnpm staging:preflight --env-file /tmp/lodge-staging.env --stripe --account acct_<Lodge sandbox id> --site
+rm /tmp/lodge-staging.env
+```
+
+For the database checks, `DATABASE_URL` must be the `lodge_app` connection
+(the pulled file holds the transaction-mode one, which works for reads).
+Fix every FAIL, then:
+
 ```bash
 STAGING_E2E=true STAGING_STRIPE=true \
 E2E_BASE_URL="$SITE_URL" \

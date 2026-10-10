@@ -24,6 +24,10 @@
  */
 import { writeFileSync } from "node:fs";
 import Stripe from "stripe";
+import {
+  STRIPE_API_VERSION,
+  STRIPE_WEBHOOK_EVENTS,
+} from "../src/server/payments/stripe-config";
 
 const args = process.argv.slice(2);
 const flag = (name: string) => args.includes(name);
@@ -36,18 +40,10 @@ const fail = (message: string): never => {
   process.exit(1);
 };
 
-/** Events the webhook handler acts on (src/server/payments/webhook.ts). */
-const EVENTS: Stripe.WebhookEndpointCreateParams.EnabledEvent[] = [
-  "checkout.session.completed",
-  "checkout.session.async_payment_succeeded",
-  "checkout.session.async_payment_failed",
-  "checkout.session.expired",
-  "refund.created",
-  "refund.updated",
-  "refund.failed",
-];
-/** The API version the app's Stripe SDK (stripe@23) is built for. */
-const API_VERSION = "2026-09-30.endive";
+/** Events the webhook handler acts on (src/server/payments/stripe-config.ts). */
+const EVENTS =
+  STRIPE_WEBHOOK_EVENTS as unknown as Stripe.WebhookEndpointCreateParams.EnabledEvent[];
+const API_VERSION = STRIPE_API_VERSION;
 
 const key = process.env.STRIPE_SECRET_KEY ?? "";
 if (!/^(sk|rk)_test_/.test(key))

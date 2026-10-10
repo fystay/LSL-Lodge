@@ -2,6 +2,12 @@ import { randomBytes } from "node:crypto";
 import { expect, test, type BrowserContext, type Page } from "@playwright/test";
 import postgres from "postgres";
 import Stripe from "stripe";
+import {
+  isolationProblems,
+  isolationState,
+  targetSchema,
+} from "../src/server/db/isolation";
+import { PRODUCTION_HOSTS } from "../src/server/ops/preflight";
 import { mintAdminSession } from "./admin-auth";
 
 /**
@@ -63,6 +69,17 @@ const sql =
 test.afterAll(async () => sql?.end());
 
 test.beforeAll(async () => {
+  // Staging only: never the live site.
+  const base = process.env.E2E_BASE_URL;
+  if (base && PRODUCTION_HOSTS.includes(new URL(base).host))
+    throw new Error("Refusing: E2E_BASE_URL is the production site.");
+  // On the shared staging database, only through the isolated Lodge role.
+  const lodgeSchema = targetSchema();
+  if (lodgeSchema !== "public") {
+    const problems = isolationProblems(await isolationState(sql), lodgeSchema);
+    if (problems.length > 0)
+      throw new Error(`Refusing: ${problems.join("; ")}.`);
+  }
   const [marker] =
     await sql`SELECT 1 FROM audit_logs WHERE action = 'demo.seeded' LIMIT 1`;
   if (!marker)

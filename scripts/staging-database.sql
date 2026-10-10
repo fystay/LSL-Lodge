@@ -27,9 +27,9 @@ BEGIN
   END IF;
 END $$;
 
--- Lets `postgres` act as lodge_app to apply migrations (objects are then
--- owned by lodge_app).
-GRANT lodge_app TO postgres;
+-- Lets the administrator running this (`postgres` on Supabase) act as
+-- lodge_app, so objects created on its behalf are owned by lodge_app.
+GRANT lodge_app TO CURRENT_USER;
 
 CREATE SCHEMA IF NOT EXISTS lodge AUTHORIZATION lodge_app;
 -- The migrator always runs CREATE SCHEMA IF NOT EXISTS, which PostgreSQL
@@ -45,6 +45,7 @@ ALTER ROLE lodge_app SET statement_timeout = '30s';
 -- The overlap constraint needs btree_gist. Supabase keeps extensions in the
 -- `extensions` schema; default operator classes are found by type, so the
 -- Lodge schema doesn't need it on its search_path.
+CREATE SCHEMA IF NOT EXISTS extensions;
 CREATE EXTENSION IF NOT EXISTS btree_gist WITH SCHEMA extensions;
 
 -- Nothing in `public` for lodge_app (PostgreSQL 15+ already denies CREATE

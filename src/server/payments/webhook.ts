@@ -10,6 +10,7 @@ import {
 } from "./checkout";
 import { refundFromStripe, snapshotFromStripe } from "./gateway";
 import { applyRefundSnapshot } from "./refunds";
+import { STRIPE_CHECKOUT_EVENTS, STRIPE_REFUND_EVENTS } from "./stripe-config";
 
 /**
  * Processes a signature-verified Stripe event exactly once.
@@ -31,19 +32,8 @@ export type WebhookOutcome =
         ApplyOutcome | "FAILED_MARKED" | "REFUND_APPLIED" | "REFUND_UNKNOWN";
     };
 
-/** Refunds issued from admin report progress through these. */
-const REFUND_EVENTS = new Set([
-  "refund.created",
-  "refund.updated",
-  "refund.failed",
-]);
-
-const CHECKOUT_EVENTS = new Set([
-  "checkout.session.completed",
-  "checkout.session.async_payment_succeeded",
-  "checkout.session.async_payment_failed",
-  "checkout.session.expired",
-]);
+const REFUND_EVENTS = new Set<string>(STRIPE_REFUND_EVENTS);
+const CHECKOUT_EVENTS = new Set<string>(STRIPE_CHECKOUT_EVENTS);
 
 export async function processStripeEvent(
   db: Database,

@@ -507,6 +507,78 @@ describe("guest cancellation under the 24-hour policy", () => {
     expect((await load(reservationId)).status).toBe("REFUNDED");
   });
 
+  it("handles refund.failed through the signed webhook: duplicates, a late 'succeeded', and reconciliation", async () => {
+    const { property, reservationId, gateway } = await paidBooking();
+    const at = new Date(PAID_AT.getTime() + HOUR);
+    const result = await cancel(property.id, reservationId, at);
+    if (!result.ok || result.outcome !== "CANCELLED_WITH_REFUND")
+      throw new Error("expected a policy refund");
+    expect(await sendRefund(db, gateway, result.refundIds[0], at)).toBe(
+      "SUCCEEDED",
+    );
+    expect((await load(reservationId)).status).toBe("REFUNDED");
+
+    const refund = [...gateway.refunds.values()][0];
+    const stripe = new Stripe("sk_test_dummy_not_a_real_key");
+    const secret = "whsec_test_refund_failed";
+    const event = (type: string, status: string, id: string) => {
+      const payload = JSON.stringify({
+        id,
+        object: "event",
+        type,
+        data: {
+          object: {
+            id: refund.id,
+            object: "refund",
+            status,
+            amount: refund.amount,
+            currency: "gbp",
+            payment_intent: refund.paymentIntentId,
+            metadata: refund.metadata,
+          },
+        },
+      });
+      return verifyStripeWebhook(
+        stripe,
+        payload,
+        stripe.webhooks.generateTestHeaderString({ payload, secret }),
+        secret,
+      );
+    };
+    const failed = event("refund.failed", "failed", "evt_refund_failed_1");
+    expect(await processStripeEvent(db, failed, at)).toMatchObject({
+      outcome: "REFUND_APPLIED",
+    });
+    expect(await load(reservationId)).toMatchObject({
+      status: "REFUND_PENDING",
+      reviewReason: "REFUND_FAILED_AT_PROVIDER",
+    });
+    // Stripe delivers it again: acknowledged, nothing changes, one alert.
+    expect(await processStripeEvent(db, failed, at)).toEqual({
+      handled: "duplicate",
+    });
+    // The earlier "succeeded" update arrives late, as a different event.
+    await processStripeEvent(
+      db,
+      event("refund.updated", "succeeded", "evt_refund_late_success"),
+      at,
+    );
+    const [row] = await refundRows(reservationId);
+    expect(row.status).toBe("FAILED");
+    expect((await load(reservationId)).status).toBe("REFUND_PENDING");
+    expect(
+      (await templates(reservationId)).filter(
+        (t) => t === "owner_refund_failed",
+      ),
+    ).toHaveLength(1);
+    // Reconciliation leaves a failed refund alone (it's final).
+    const { reconcilePayments } = await import("./reconcile");
+    expect(
+      (await reconcilePayments(db, gateway, new Date(Date.now() + 20 * 60_000)))
+        .refunds,
+    ).toBe(0);
+  });
+
   it("refunds in full 1 ms before the deadline, and only once Stripe confirms is it refunded", async () => {
     const { property, reservationId, gateway } = await paidBooking();
     gateway.refundStatus = "pending";

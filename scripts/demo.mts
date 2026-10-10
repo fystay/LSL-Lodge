@@ -8,6 +8,10 @@
  *                      calendar sources, nothing else
  *
  * Safety (all enforced before anything is written):
+ * - The connection must be the Lodge's own: with DATABASE_SCHEMA set, the
+ *   isolated Lodge role (src/server/db/isolation.ts); without it, a
+ *   database with no other application's tables.
+ * - `seed` refuses a database that already holds non-demo bookings.
  * - DATABASE_URL must be local, or its host must be repeated in
  *   DEMO_DATABASE_HOST (so a production URL can't be used by accident).
  * - STRIPE_SECRET_KEY, if set, must be a test key (sk_test_…).
@@ -22,6 +26,11 @@
 import { and, eq, inArray, isNotNull, like, or, sql } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/postgres-js";
 import postgres from "postgres";
+import {
+  isolationProblems,
+  isolationState,
+  targetSchema,
+} from "../src/server/db/isolation";
 import * as schema from "../src/server/db/schema";
 
 const command = process.argv[2];
@@ -70,7 +79,41 @@ const demoEmail = or(
   ),
 )!;
 
+/**
+ * Before anything: the connection must be the Lodge's own. On a shared
+ * database (DATABASE_SCHEMA set) it must be the isolated Lodge role; on an
+ * unscoped one, no other application's tables may be present.
+ */
+async function assertLodgeDatabase() {
+  const lodgeSchema = targetSchema();
+  if (lodgeSchema !== "public") {
+    const problems = isolationProblems(
+      await isolationState(client),
+      lodgeSchema,
+    );
+    if (problems.length > 0) fail(`Refusing: ${problems.join("; ")}.`);
+  } else {
+    const [{ n }] = await client`
+      SELECT count(*)::int AS n FROM pg_tables
+      WHERE schemaname = 'public' AND tablename IN ('User', 'Booking', '_prisma_migrations')`;
+    if (n > 0)
+      fail(
+        "Refusing: another application's tables are in this database. Set DATABASE_SCHEMA=lodge and connect as lodge_app.",
+      );
+  }
+}
+
 async function seed() {
+  // Never mark a database holding real bookings as a demo database (that
+  // would enable `reset` there).
+  const [{ real }] = await db
+    .select({ real: sql<number>`count(*)::int` })
+    .from(schema.reservations)
+    .where(sql`NOT (${demoEmail})`);
+  if (real > 0 && !(await isDemoDatabase()))
+    fail(
+      `Refusing: this database holds ${real} booking(s) that aren't demo bookings. Seed only an empty staging database.`,
+    );
   await db.transaction(async (tx) => {
     let [property] = await tx
       .select()
@@ -275,6 +318,7 @@ async function reset() {
 }
 
 try {
+  await assertLodgeDatabase();
   if (command === "seed") await seed();
   else if (command === "status") await status();
   else if (command === "reset") await reset();

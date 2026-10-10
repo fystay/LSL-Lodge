@@ -3,7 +3,7 @@ import { and, eq } from "drizzle-orm";
 import { afterAll, beforeEach, describe, expect, it } from "vitest";
 import { parseIsoDate as d } from "@/lib/dates";
 import { auditLogs, payments, reservations } from "@/server/db/schema";
-import { createHold } from "@/server/booking/holds";
+import { createHold, expireLapsedHolds } from "@/server/booking/holds";
 import { guestCancel } from "@/server/booking/resolution";
 import { FakeGateway } from "../../../tests/support/fake-gateway";
 import {
@@ -142,5 +142,45 @@ describe("Stripe reconciliation", () => {
       .where(eq(payments.kind, "REFUND"));
     expect(refund.status).toBe("SUCCEEDED");
     expect((await load(reservationId)).status).toBe("REFUNDED");
+  });
+
+  it("sends a missed payment on a hold the expiry job already expired to the owner, not confirmed", async () => {
+    const { reservationId, gateway } = await checkoutStarted();
+    gateway.pay(gateway.latest().id); // paid at Stripe; webhook lost
+    // The expiry job runs before anything heard about the payment.
+    const [{ holdExpiresAt }] = await db
+      .select({ holdExpiresAt: reservations.holdExpiresAt })
+      .from(reservations)
+      .where(eq(reservations.id, reservationId));
+    const afterHold = new Date(holdExpiresAt!.getTime() + MINUTE);
+    await expireLapsedHolds(db, null, afterHold);
+    expect((await load(reservationId)).status).toBe("EXPIRED");
+
+    await reconcilePayments(db, gateway, afterHold);
+    const r = await load(reservationId);
+    expect([r.status, r.reviewReason, r.confirmedAt]).toEqual([
+      "REQUIRES_REVIEW",
+      "PAYMENT_AFTER_EXPIRY",
+      null,
+    ]);
+  });
+
+  it("confirms a payment made in time whose webhook arrives after the hold's time, before any expiry ran", async () => {
+    const { reservationId, gateway } = await checkoutStarted();
+    const session = gateway.pay(gateway.latest().id);
+    const [{ holdExpiresAt }] = await db
+      .select({ holdExpiresAt: reservations.holdExpiresAt })
+      .from(reservations)
+      .where(eq(reservations.id, reservationId));
+    // Stripe only takes payment while the session (inside the hold) is
+    // open, so the money arrived in time; nobody else could take the dates
+    // without first expiring this hold.
+    const late = new Date(holdExpiresAt!.getTime() + 2 * MINUTE);
+    expect(await applyCheckoutSession(db, session, late)).toBe("CONFIRMED");
+    const r = await load(reservationId);
+    expect(r.status).toBe("CONFIRMED");
+    expect(r.freeCancellationUntil!.getTime() - r.confirmedAt!.getTime()).toBe(
+      24 * 3_600_000,
+    );
   });
 });

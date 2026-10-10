@@ -21,10 +21,19 @@ import { join } from "node:path";
 import { drizzle } from "drizzle-orm/postgres-js";
 import { migrate } from "drizzle-orm/postgres-js/migrator";
 import postgres from "postgres";
+import {
+  isolationProblems,
+  isolationState,
+  pinFunctionsSql as pinFunctions,
+  targetSchema,
+  toSchema,
+} from "../src/server/db/isolation";
 
-const SCHEMA = process.env.DATABASE_SCHEMA ?? "public";
-if (!/^[a-z_][a-z0-9_]{0,62}$/.test(SCHEMA)) {
-  console.error("DATABASE_SCHEMA must be a plain lower-case identifier.");
+let SCHEMA: string;
+try {
+  SCHEMA = targetSchema();
+} catch (error) {
+  console.error((error as Error).message);
   process.exit(1);
 }
 const isolated = SCHEMA !== "public";
@@ -33,40 +42,6 @@ type Journal = { entries: { idx: number; when: number; tag: string }[] };
 const journal: Journal = JSON.parse(
   readFileSync("./drizzle/meta/_journal.json", "utf8"),
 );
-
-/** Rewrites a migration's explicit `public` references to the target schema. */
-export function toSchema(query: string, schema: string): string {
-  const out = query
-    .replaceAll('"public".', `"${schema}".`)
-    .replaceAll("schemaname = 'public'", `schemaname = '${schema}'`)
-    .replaceAll("public.%I", `${schema}.%I`)
-    .replaceAll("IN SCHEMA public", `IN SCHEMA ${schema}`);
-  const code = out
-    .split("\n")
-    .map((line) => line.replace(/--.*$/, ""))
-    .join("\n");
-  if (/\bpublic\s*\.|"public"|IN SCHEMA public|'public'/i.test(code))
-    throw new Error(
-      "A migration still refers to the public schema after rewriting; refusing.",
-    );
-  return out;
-}
-
-/** Functions created by the migrations resolve names in the Lodge schema only. */
-const pinFunctions = (schema: string) => `
-DO $$
-DECLARE f regprocedure;
-BEGIN
-  FOR f IN
-    SELECT p.oid::regprocedure FROM pg_proc p
-    JOIN pg_namespace n ON n.oid = p.pronamespace
-    WHERE n.nspname = '${schema}'
-      AND NOT EXISTS (SELECT 1 FROM pg_depend d
-                      WHERE d.objid = p.oid AND d.deptype = 'e')
-  LOOP
-    EXECUTE format('ALTER FUNCTION %s SET search_path = ${schema}, pg_catalog', f);
-  END LOOP;
-END $$;`;
 
 if (process.argv.includes("--print")) {
   if (!isolated) {
@@ -108,10 +83,12 @@ const client = postgres(url, { max: 1, onnotice: () => {} });
 try {
   let folder = "./drizzle";
   if (isolated) {
-    const [{ schema }] = await client`SELECT current_schema() AS schema`;
-    if (schema !== SCHEMA)
+    // Privilege barrier: only a role that can't reach anything in `public`
+    // may apply the Lodge migrations (see src/server/db/isolation.ts).
+    const problems = isolationProblems(await isolationState(client), SCHEMA);
+    if (problems.length > 0)
       throw new Error(
-        `Refusing: this connection resolves names in "${schema ?? "(none)"}", not "${SCHEMA}". Connect as the Lodge role (search_path = ${SCHEMA}).`,
+        `Refusing to migrate schema "${SCHEMA}": ${problems.join("; ")}.`,
       );
     folder = mkdtempSync(join(tmpdir(), "lodge-migrations-"));
     mkdirSync(join(folder, "meta"));

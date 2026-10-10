@@ -18,6 +18,11 @@ import { getTableConfig, PgTable } from "drizzle-orm/pg-core";
 import { drizzle } from "drizzle-orm/postgres-js";
 import { migrate } from "drizzle-orm/postgres-js/migrator";
 import postgres from "postgres";
+import {
+  isolationProblems,
+  isolationState,
+  targetSchema,
+} from "../src/server/db/isolation";
 import * as schema from "../src/server/db/schema";
 
 const url = process.env.DATABASE_URL_UNPOOLED ?? process.env.DATABASE_URL;
@@ -41,7 +46,7 @@ const journal = JSON.parse(
 
 const sql = postgres(url, { max: 1, onnotice: () => {}, prepare: false });
 // A shared database keeps the Lodge in its own schema (scripts/migrate.mts).
-const SCHEMA = process.env.DATABASE_SCHEMA ?? "public";
+const SCHEMA = targetSchema();
 const isolated = SCHEMA !== "public";
 if (isolated) ours.add("__drizzle_migrations");
 let failures = 0;
@@ -56,6 +61,17 @@ try {
   const [{ db, version }] = await sql`
     SELECT current_database() AS db, current_setting('server_version') AS version`;
   console.log(`Connected to ${host}, database "${db}", PostgreSQL ${version}.`);
+
+  if (isolated) {
+    // The connection itself must be the restricted Lodge role: it can't
+    // reach anything in `public` (another application's tables).
+    const problems = isolationProblems(await isolationState(sql), SCHEMA);
+    check(
+      `connection isolated to schema "${SCHEMA}"`,
+      problems.length === 0,
+      problems.join("; "),
+    );
+  }
 
   const present = (
     await sql`SELECT tablename FROM pg_tables WHERE schemaname = ${SCHEMA}`

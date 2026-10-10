@@ -15,8 +15,10 @@ const JOB_LABEL: Record<string, string> = {
   "expire-holds": "Release unpaid holds that have lapsed",
   "send-notifications": "Send emails",
   "process-refunds": "Send and retry refunds",
+  "reconcile-payments": "Check unsettled payments with Stripe",
   "sync-calendars": "Sync imported calendars",
   maintenance: "Housekeeping and health checks",
+  "data-retention": "Remove guest details past retention",
 };
 
 const PROBLEM_TEXT: Record<string, string> = {
@@ -80,15 +82,19 @@ async function System({
             Everything is running normally.
           </p>
         ) : (
-          <ul role="alert" className="list-disc space-y-1 pl-5 text-danger">
-            {health.problems.map((p) => (
-              <li key={p}>
-                {p.startsWith("job_overdue:")
-                  ? `“${JOB_LABEL[p.slice(12)] ?? p.slice(12)}” hasn’t completed recently. Is the scheduler running?`
-                  : (PROBLEM_TEXT[p] ?? p)}
-              </li>
-            ))}
-          </ul>
+          // The alert role goes on a wrapper: on the <ul> itself it would
+          // replace the list semantics its <li> children depend on.
+          <div role="alert">
+            <ul className="list-disc space-y-1 pl-5 text-danger">
+              {health.problems.map((p) => (
+                <li key={p}>
+                  {p.startsWith("job_overdue:")
+                    ? `“${JOB_LABEL[p.slice(12)] ?? p.slice(12)}” hasn’t completed recently. Is the scheduler running?`
+                    : (PROBLEM_TEXT[p] ?? p)}
+                </li>
+              ))}
+            </ul>
+          </div>
         )}
         <p className="mt-3 text-sm text-ink-muted">
           Background work runs when the scheduler calls the site every 5
