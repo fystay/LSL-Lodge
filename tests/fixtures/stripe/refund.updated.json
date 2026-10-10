@@ -1,0 +1,48 @@
+{
+  "id": "evt_3UOuvzCyjWPP8AoI0cMYgAOD",
+  "object": "event",
+  "api_version": "2026-08-26.dahlia",
+  "created": 1791618225,
+  "data": {
+    "object": {
+      "id": "re_3UOuvzCyjWPP8AoI03e6vSSc",
+      "object": "refund",
+      "amount": 51000,
+      "balance_transaction": "txn_3UOuvzCyjWPP8AoI0PzqYaiw",
+      "charge": "ch_3UOuvzCyjWPP8AoI0GI9zYzU",
+      "created": 1791618224,
+      "currency": "gbp",
+      "customer": null,
+      "destination_details": {
+        "card": {
+          "reference_status": "available",
+          "reference_type": "acquirer_reference_number",
+          "type": "refund"
+        },
+        "type": "card"
+      },
+      "metadata": {
+        "refund_payment_id": "00000000-0000-4000-8000-000000000003",
+        "reservation_id": "00000000-0000-4000-8000-000000000001"
+      },
+      "payment_intent": "pi_3UOuvzCyjWPP8AoI0EaSx7jN",
+      "payment_method": "pm_1UOuvyCyjWPP8AoIMKuETZzv",
+      "presentment_details": {
+        "presentment_amount": 70208,
+        "presentment_currency": "usd"
+      },
+      "reason": null,
+      "receipt_number": null,
+      "status": "succeeded"
+    },
+    "previous_attributes": {
+      "destination_details": {
+        "card": { "reference": null, "reference_status": "pending" }
+      }
+    }
+  },
+  "livemode": false,
+  "pending_webhooks": 0,
+  "request": { "id": null, "idempotency_key": null },
+  "type": "refund.updated"
+}

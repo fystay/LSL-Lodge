@@ -294,6 +294,9 @@ describe("createHold", () => {
         provider: "AIRBNB_ICAL",
         direction: "IMPORT",
         label: "Airbnb",
+        // Freshly synced: the stale-calendar stop doesn't apply.
+        syncStatus: "OK",
+        lastSuccessAt: NOW,
       })
       .returning();
     await db.insert(externalBusyPeriods).values({
@@ -581,6 +584,56 @@ describe("owner block lifecycle", () => {
           reason: null,
         })
       ).ok,
+    ).toBe(true);
+  });
+});
+
+describe("stale imported calendars (safety stop)", () => {
+  const addSource = (
+    propertyId: string,
+    values: Partial<typeof externalCalendarSources.$inferInsert>,
+  ) =>
+    db.insert(externalCalendarSources).values({
+      propertyId,
+      provider: "AIRBNB_ICAL",
+      direction: "IMPORT",
+      label: "Airbnb",
+      ...values,
+    });
+
+  it("takes no new holds while an import has never synced or is past its stale window", async () => {
+    const never = await setupProperty();
+    await addSource(never.id, {});
+    expect(
+      await createHold(db, input(never.id, "2027-03-01", "2027-03-04")),
+    ).toEqual({ ok: false, reason: "CALENDAR_STALE" });
+
+    const old = await setupProperty();
+    await addSource(old.id, {
+      syncStatus: "ERROR",
+      lastSuccessAt: new Date(NOW.getTime() - 61 * MINUTE),
+      staleAfterMinutes: 60,
+    });
+    expect(
+      await createHold(db, input(old.id, "2027-03-01", "2027-03-04")),
+    ).toEqual({ ok: false, reason: "CALENDAR_STALE" });
+    expect(await db.select().from(reservations)).toHaveLength(0);
+  });
+
+  it("still books when one poll failed but the last good import is recent, or the source is switched off", async () => {
+    const recent = await setupProperty();
+    await addSource(recent.id, {
+      syncStatus: "ERROR",
+      lastSuccessAt: new Date(NOW.getTime() - 10 * MINUTE),
+    });
+    expect(
+      (await createHold(db, input(recent.id, "2027-03-01", "2027-03-04"))).ok,
+    ).toBe(true);
+
+    const off = await setupProperty();
+    await addSource(off.id, { enabled: false });
+    expect(
+      (await createHold(db, input(off.id, "2027-03-01", "2027-03-04"))).ok,
     ).toBe(true);
   });
 });

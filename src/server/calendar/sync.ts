@@ -518,3 +518,41 @@ export async function dueSources(db: Database, now: Date) {
     )
     .limit(20);
 }
+
+/**
+ * Enabled import calendars (Airbnb, Google) whose data can't be trusted
+ * right now: never synced successfully, or no success within their stale
+ * window (default 60 minutes). A single failed poll with a recent success
+ * doesn't count: the last good import is still current.
+ *
+ * Bookings use this as a safety stop (src/server/booking/holds.ts and
+ * src/server/payments/checkout.ts): while any import is stale, no new hold
+ * is taken and a payment that arrives goes to the owner for review instead
+ * of confirming, because an Airbnb booking might be missing.
+ */
+export async function staleImportSources(
+  db: Pick<Database, "select">,
+  propertyId: string,
+  now: Date,
+): Promise<{ id: string; label: string; provider: string }[]> {
+  const sources = await db
+    .select({
+      id: externalCalendarSources.id,
+      label: externalCalendarSources.label,
+      provider: externalCalendarSources.provider,
+      lastSuccessAt: externalCalendarSources.lastSuccessAt,
+      staleAfterMinutes: externalCalendarSources.staleAfterMinutes,
+      createdAt: externalCalendarSources.createdAt,
+    })
+    .from(externalCalendarSources)
+    .where(
+      and(
+        eq(externalCalendarSources.propertyId, propertyId),
+        eq(externalCalendarSources.enabled, true),
+        eq(externalCalendarSources.direction, "IMPORT"),
+      ),
+    );
+  return sources
+    .filter((s) => s.lastSuccessAt === null || isStale(s, now))
+    .map(({ id, label, provider }) => ({ id, label, provider }));
+}

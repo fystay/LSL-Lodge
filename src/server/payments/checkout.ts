@@ -10,6 +10,7 @@ import {
   reservations,
 } from "@/server/db/schema";
 import { conflictingBlocks, loadBlocks } from "@/server/booking/availability";
+import { staleImportSources } from "@/server/calendar/sync";
 import {
   enqueueForReservation,
   enqueueNotification,
@@ -100,7 +101,10 @@ export async function startCheckout(
       .limit(1);
     if (!item) return { ok: false, reason: "ALREADY_PAID" } as const;
 
-    if (await hasExternalConflict(tx, r, now))
+    if (
+      (await hasExternalConflict(tx, r, now)) ||
+      (await staleImportSources(tx, r.propertyId, now)).length > 0
+    )
       return { ok: false, reason: "UNAVAILABLE" } as const;
 
     const open = await tx
@@ -356,6 +360,10 @@ export async function applyCheckoutSession(
       return review(tx, r, payment.id, "NOT_APPROVED", "NEEDS_REVIEW");
     if (await hasExternalConflict(tx, r, now))
       return review(tx, r, payment.id, "CALENDAR_CONFLICT", "NEEDS_REVIEW");
+    // Imported calendars out of date: a booking made elsewhere may be
+    // missing, so the owner checks before this one is confirmed.
+    if ((await staleImportSources(tx, r.propertyId, now)).length > 0)
+      return review(tx, r, payment.id, "CALENDAR_STALE", "NEEDS_REVIEW");
 
     const outstanding = await tx
       .select({ id: paymentScheduleItems.id })

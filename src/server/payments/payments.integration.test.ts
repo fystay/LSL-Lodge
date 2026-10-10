@@ -859,3 +859,70 @@ describe("free-cancellation clock (starts at verified payment)", () => {
     expect(await clock(reservationId)).toEqual(first);
   });
 });
+
+describe("payment arriving while an imported calendar is stale", () => {
+  it("goes to the owner for review instead of confirming, and the owner can then confirm it", async () => {
+    const { property, reservationId } = await heldBooking();
+    const gateway = new FakeGateway();
+    await startCheckout(db, gateway, {
+      reservationId,
+      baseUrl: BASE,
+      now: NOW,
+    });
+    // The Airbnb feed went quiet after the guest started paying.
+    await db.insert(externalCalendarSources).values({
+      propertyId: property.id,
+      provider: "AIRBNB_ICAL",
+      direction: "IMPORT",
+      label: "Airbnb",
+      syncStatus: "ERROR",
+      lastSuccessAt: new Date(NOW.getTime() - 2 * HOUR),
+    });
+    expect(
+      await applyCheckoutSession(db, gateway.pay(gateway.latest().id), NOW),
+    ).toBe("NEEDS_REVIEW");
+    const r = await load(reservationId);
+    expect([r.status, r.reviewReason, r.confirmedAt]).toEqual([
+      "REQUIRES_REVIEW",
+      "CALENDAR_STALE",
+      null,
+    ]);
+    // The dates stay held for this guest; the money is recorded.
+    expect((await paymentRows(reservationId))[0].status).toBe("SUCCEEDED");
+    expect(await templates(reservationId)).toContain(
+      "owner_payment_needs_review",
+    );
+
+    const checked = new Date(NOW.getTime() + HOUR);
+    expect(
+      await confirmReviewedBooking(db, {
+        propertyId: property.id,
+        reservationId,
+        actor: "owner@example.test",
+        now: checked,
+      }),
+    ).toEqual({ ok: true });
+    const after = await load(reservationId);
+    expect(after.status).toBe("CONFIRMED");
+    expect(after.freeCancellationUntil?.toISOString()).toBe(
+      new Date(checked.getTime() + 24 * HOUR).toISOString(),
+    );
+  });
+
+  it("won't start Checkout while a calendar is stale", async () => {
+    const { property, reservationId } = await heldBooking();
+    await db.insert(externalCalendarSources).values({
+      propertyId: property.id,
+      provider: "AIRBNB_ICAL",
+      direction: "IMPORT",
+      label: "Airbnb",
+    });
+    expect(
+      await startCheckout(db, new FakeGateway(), {
+        reservationId,
+        baseUrl: BASE,
+        now: NOW,
+      }),
+    ).toEqual({ ok: false, reason: "UNAVAILABLE" });
+  });
+});

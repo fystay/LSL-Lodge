@@ -402,6 +402,7 @@ export async function guestCancel(
         status: "CANCELLED",
         cancelledAt: actionAt,
         cancelledBy: "GUEST",
+        cancellationRequestedAt: now,
         holdExpiresAt: null,
       })
       .where(eq(reservations.id, r.id));
@@ -417,8 +418,14 @@ export async function guestCancel(
       r.id,
       actor,
       {
-        receivedAt: now.toISOString(),
-        ...(actor ? { recordedAt: actionAt.toISOString() } : {}),
+        // When the request reached us: entered by the owner (from the
+        // guest's email or message) or, for a request made on the site,
+        // the server's own clock. Eligibility is decided on this.
+        requestReceivedAt: now.toISOString(),
+        requestTimeSource: actor ? "OWNER_ENTERED" : "SERVER_CLOCK",
+        // When the cancellation was actually recorded (server clock). The
+        // audit row's own created_at is the database's time of writing.
+        recordedAt: actionAt.toISOString(),
         freeCancellationUntil: r.freeCancellationUntil?.toISOString() ?? null,
         refundEligible: eligible,
         refundMinor: refund.totalMinor,

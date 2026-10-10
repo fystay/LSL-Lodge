@@ -265,7 +265,7 @@ export const TEMPLATES: Record<
       "Calendar sync is failing",
       [
         {
-          p: `${d.detail ?? "An imported calendar"} has failed to sync repeatedly. Dates booked elsewhere may not be blocked on the website until it recovers. Previously imported dates remain blocked.`,
+          p: `${d.detail ?? "An imported calendar"} has failed to sync repeatedly. Previously imported dates remain blocked. Once it has had no successful sync for its stale period (60 minutes by default), the website stops taking new bookings, and any payment that arrives goes to you for review instead of confirming, until the calendar syncs again.`,
         },
         { link: "Check calendar connections", href: d.adminUrl },
       ],

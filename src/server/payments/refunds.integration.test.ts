@@ -510,7 +510,8 @@ describe("guest cancellation under the 24-hour policy", () => {
       .from(auditLogs)
       .where(eq(auditLogs.action, "reservation.cancelled_by_guest"));
     expect(entry.metadata).toMatchObject({
-      receivedAt: justBefore.toISOString(),
+      requestReceivedAt: justBefore.toISOString(),
+      requestTimeSource: "SERVER_CLOCK",
       freeCancellationUntil: DEADLINE.toISOString(),
       refundEligible: true,
       refundMinor: 30_000,
@@ -671,11 +672,17 @@ describe("cancellation the guest asked for, recorded by the owner", () => {
       .where(eq(auditLogs.action, "reservation.cancelled_at_guest_request"));
     expect(entry.actorId).toBe(OWNER_EMAIL);
     expect(entry.metadata).toMatchObject({
-      receivedAt: received.toISOString(),
+      requestReceivedAt: received.toISOString(),
+      requestTimeSource: "OWNER_ENTERED",
       recordedAt: recorded.toISOString(),
       freeCancellationUntil: DEADLINE.toISOString(),
       refundEligible: true,
     });
+    // The audit row's own timestamp is when it was written, not the claim.
+    expect(entry.createdAt.getTime()).toBeGreaterThan(received.getTime());
+    expect(r.cancellationRequestedAt?.toISOString()).toBe(
+      received.toISOString(),
+    );
     // The guest is told; the owner, who recorded it, isn't emailed.
     const t = await templates(reservationId);
     expect(t).toContain("guest_cancellation_confirmed");

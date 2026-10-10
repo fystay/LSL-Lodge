@@ -17,6 +17,7 @@ import {
   type QuoteError,
 } from "@/server/pricing/quote";
 import { loadPricingInputs } from "@/server/pricing/load";
+import { staleImportSources } from "@/server/calendar/sync";
 import { conflictingBlocks, loadBlocks, type Block } from "./availability";
 import {
   guestLinkSecret,
@@ -59,7 +60,12 @@ export type HoldResult =
     }
   | {
       ok: false;
-      reason: "BOOKINGS_DISABLED" | "NOT_CONFIGURED" | "IDEMPOTENCY_MISMATCH";
+      reason:
+        | "BOOKINGS_DISABLED"
+        | "NOT_CONFIGURED"
+        | "IDEMPOTENCY_MISMATCH"
+        /** An imported calendar is out of date: no new holds (safety stop). */
+        | "CALENDAR_STALE";
     }
   | {
       ok: false;
@@ -116,6 +122,11 @@ export async function createHold(
       if (replay) return replay;
 
       await expireLapsedHolds(tx, property.id, now);
+
+      // Safety stop: while Airbnb (or another import) is out of date we
+      // can't see its latest bookings, so no new dates are held.
+      if ((await staleImportSources(tx, property.id, now)).length > 0)
+        return { ok: false, reason: "CALENDAR_STALE" } as const;
 
       const stay = { start: input.checkIn, end: input.checkOut };
       const blocks = await loadBlocks(

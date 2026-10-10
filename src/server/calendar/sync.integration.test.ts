@@ -82,6 +82,13 @@ async function setup() {
   return { property, sourceId: added.id };
 }
 
+/** Marks a source as freshly synced, so the stale-calendar stop allows bookings. */
+const markFresh = (sourceId: string, at = new Date()) =>
+  db
+    .update(externalCalendarSources)
+    .set({ lastSuccessAt: at, syncStatus: "OK" })
+    .where(eq(externalCalendarSources.id, sourceId));
+
 const periods = (sourceId: string) =>
   db
     .select()
@@ -260,6 +267,7 @@ describe("syncIcalSource", () => {
 
   it("flags a clash with a website booking without changing either side", async () => {
     const { property, sourceId } = await setup();
+    await markFresh(sourceId);
     const req = await createHold(db, {
       propertyId: property.id,
       checkIn: d("2027-03-01"),
@@ -312,6 +320,7 @@ describe("export feed", () => {
         .fetcher,
       keys,
     });
+    await markFresh(sourceId);
     const req = await createHold(db, {
       propertyId: property.id,
       checkIn: d("2027-03-01"),

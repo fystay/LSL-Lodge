@@ -55,6 +55,8 @@ const REVIEW_REASON: Record<string, string> = {
     "Payment arrived after the booking lapsed and the dates had been re-booked. It is being refunded in full automatically; check the refund below.",
   AMOUNT_MISMATCH:
     "The amount paid doesn’t match the agreed price. Check the payment in Stripe.",
+  CALENDAR_STALE:
+    "Payment was received while an imported calendar (such as Airbnb) was out of date, so it wasn't confirmed automatically. Check Airbnb for a clash, then confirm the booking or cancel and refund it.",
   CALENDAR_CONFLICT:
     "Payment was received, but another calendar now overlaps these dates. Resolve the clash before confirming.",
   DUPLICATE_PAYMENT:
@@ -440,6 +442,14 @@ async function Detail({
                     ? "Guest"
                     : r.cancelledBy.replace(/^OWNER:/, "Owner: ")}
                 </dd>
+                {r.cancellationRequestedAt && (
+                  <>
+                    <dt className="font-semibold">Request received</dt>
+                    <dd>{when(r.cancellationRequestedAt)}</dd>
+                  </>
+                )}
+                <dt className="font-semibold">Recorded</dt>
+                <dd>{when(r.cancelledAt)}</dd>
               </>
             )}
             {r.confirmedAt && (

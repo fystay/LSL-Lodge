@@ -102,6 +102,55 @@ export function refundFromStripe(refund: Stripe.Refund): RefundSnapshot {
   };
 }
 
+/**
+ * The Checkout Session request. Verified against the Stripe sandbox on
+ * 10 October 2026 (accepted as sent; payload shapes in
+ * tests/fixtures/stripe/).
+ */
+export function checkoutSessionParams(
+  p: CreateCheckoutParams,
+): Stripe.Checkout.SessionCreateParams {
+  return {
+    mode: "payment",
+    // Card (including wallets) settles synchronously, so a payment can't
+    // still be pending when the dates' hold runs out.
+    allowed_payment_method_types: ["card"],
+    // Charge in the booking's currency only. With Stripe's Adaptive Pricing
+    // a guest could pay in their own currency (with a conversion fee), and a
+    // "full refund" in GBP could then return a different amount in theirs.
+    adaptive_pricing: { enabled: false },
+    line_items: [
+      {
+        quantity: 1,
+        price_data: {
+          currency: p.currency.toLowerCase(),
+          unit_amount: p.amountMinor,
+          product_data: { name: p.description },
+        },
+      },
+    ],
+    customer_email: p.customerEmail,
+    client_reference_id: p.reservationId,
+    metadata: {
+      reservation_id: p.reservationId,
+      payment_id: p.paymentId,
+      public_ref: p.publicRef,
+    },
+    payment_intent_data: {
+      metadata: {
+        reservation_id: p.reservationId,
+        payment_id: p.paymentId,
+      },
+    },
+    success_url: p.successUrl,
+    cancel_url: p.cancelUrl,
+    expires_at: Math.floor(p.expiresAt.getTime() / 1000),
+    ...(p.submitMessage
+      ? { custom_text: { submit: { message: p.submitMessage } } }
+      : {}),
+  };
+}
+
 class StripeCheckoutGateway implements PaymentGateway {
   constructor(private readonly stripe: Stripe) {}
 
@@ -128,41 +177,7 @@ class StripeCheckoutGateway implements PaymentGateway {
 
   async createCheckoutSession(p: CreateCheckoutParams) {
     const session = await this.stripe.checkout.sessions.create(
-      {
-        mode: "payment",
-        // Card (including wallets) settles synchronously, so a payment can't
-        // still be pending when the dates' hold runs out.
-        allowed_payment_method_types: ["card"],
-        line_items: [
-          {
-            quantity: 1,
-            price_data: {
-              currency: p.currency.toLowerCase(),
-              unit_amount: p.amountMinor,
-              product_data: { name: p.description },
-            },
-          },
-        ],
-        customer_email: p.customerEmail,
-        client_reference_id: p.reservationId,
-        metadata: {
-          reservation_id: p.reservationId,
-          payment_id: p.paymentId,
-          public_ref: p.publicRef,
-        },
-        payment_intent_data: {
-          metadata: {
-            reservation_id: p.reservationId,
-            payment_id: p.paymentId,
-          },
-        },
-        success_url: p.successUrl,
-        cancel_url: p.cancelUrl,
-        expires_at: Math.floor(p.expiresAt.getTime() / 1000),
-        ...(p.submitMessage
-          ? { custom_text: { submit: { message: p.submitMessage } } }
-          : {}),
-      },
+      checkoutSessionParams(p),
       { idempotencyKey: p.idempotencyKey },
     );
     return snapshotFromStripe(session);
