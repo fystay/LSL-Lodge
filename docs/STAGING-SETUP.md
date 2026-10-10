@@ -1,13 +1,17 @@
 # Staging setup (customer demo)
 
-Status: 10 October 2026, 14:45 UTC. **Partly set up.** The Lodge's staging
-database lives in the owner-authorised Supabase project `lsllodge`
-(`sqkpixwvugrxllrxlexs`), isolated in schema `lodge` (§1), with migrations
-0000–0010 applied, demo data seeded and a demo owner invited
-(`pnpm staging:hosted`, §5). The Preview has its database, booking-preview
-and job secrets; search, quotes and holds work there. Still missing: a
-valid `CREDENTIALS_ENCRYPTION_KEY` (the one set doesn't parse as a base64
-32-byte key, so admin sign-in is off) and the Lodge Stripe sandbox (§2).
+Status: 10 October 2026, 16:00 UTC. **Usable without payments.** The
+Lodge's staging database lives in the owner-authorised Supabase project
+`lsllodge` (`sqkpixwvugrxllrxlexs`), isolated in schema `lodge` (§1), with
+migrations 0000–0010 applied, demo data seeded and a demo owner
+(`demo-owner@example.test`) enrolled (`pnpm staging:hosted`, §5). The
+branch's Preview variables are set (a branch-scoped
+`CREDENTIALS_ENCRYPTION_KEY` overrides the all-Preview one, which wasn't a
+valid key). Verified on the Preview: search, quotes, holds, overlap refusal,
+owner sign-in with TOTP, owner blocks (and refusal over a booking), the
+seven background tasks, `/api/health` and `/api/jobs/tick`. Still missing:
+the Lodge Stripe sandbox (§2), so payment, webhooks and refunds are untested
+there.
 Nothing here touches production (lsllodge.vercel.app), the other
 application's tables in that project, or the other app's Stripe sandbox.
 
