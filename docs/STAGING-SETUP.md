@@ -111,6 +111,23 @@ Previews are behind Vercel Authentication. Keep it on.
 
 ## 5. Database, demo data, owner account and webhook (operator's machine)
 
+**Migrations without a direct database connection** (e.g. from a cloud
+session, which can only reach Supabase over HTTPS): store a Supabase access
+token as an environment secret named `SUPABASE_ACCESS_TOKEN` (never in chat
+or git; a personal access token reaches every project on the account, so
+revoke it afterwards), then:
+
+```bash
+pnpm db:hosted-migrate --project sqkpixwvugrxllrxlexs --name lsllodge          # dry run
+pnpm db:hosted-migrate --project sqkpixwvugrxllrxlexs --name lsllodge --apply
+```
+
+It applies only the migrations missing from the `lodge` journal, each in one
+transaction as `lodge_app`, compares a catalog-only fingerprint of `public`
+before and after, and never retries: after a timeout, run the dry run to see
+what committed. (The Supabase connector in Claude can't do this: it waits
+for a person's confirmation on any statement containing `DROP`.)
+
 1. In the Supabase dashboard (project `lsllodge`) → SQL editor, give the
    Lodge role a password **you** generate (never in chat or git):
 

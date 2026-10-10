@@ -26,7 +26,8 @@
     "db:verify": "tsx scripts/db-verify.mts",
     "demo": "tsx scripts/demo.mts",
     "stripe:test-setup": "tsx scripts/stripe-test-setup.mts",
-    "staging:preflight": "tsx scripts/staging-preflight.mts"
+    "staging:preflight": "tsx scripts/staging-preflight.mts",
+    "db:hosted-migrate": "tsx scripts/hosted-migrate.mts"
   },
   "dependencies": {
     "drizzle-orm": "0.45.3",
