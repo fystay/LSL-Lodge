@@ -17,6 +17,10 @@ import {
   type GuestStatus,
 } from "@/server/booking/guest-status";
 import { getBookingContext } from "@/server/booking/public";
+import {
+  formatDeadline,
+  refundEligible,
+} from "@/server/booking/cancellation-policy";
 import { applyCheckoutSession } from "@/server/payments/checkout";
 import { getPaymentGateway } from "@/server/payments/gateway";
 import type { Quote } from "@/server/pricing/quote";
@@ -47,9 +51,15 @@ export default function BookingStatusPage({
 }
 
 const CANCEL_NOTICES: Record<string, string> = {
-  withdrawn: "Your request has been withdrawn. Nothing was charged.",
-  requested:
-    "We’ve told the owner you’d like to cancel. Your booking stands until they reply.",
+  released: "Done. The dates have been released and nothing was charged.",
+  refunding:
+    "Your booking is cancelled and a full refund has been started. Refunds usually reach your card within 5–10 working days; we’ll email you when the payment provider confirms it.",
+  cancelled:
+    "Your booking is cancelled. As it was cancelled more than 24 hours after booking, no refund is due.",
+  "ack-required":
+    "The 24-hour free cancellation period has ended, so your booking has NOT been cancelled. If you still want to cancel, please confirm below that you understand no refund will be made.",
+  processing:
+    "A payment is still being processed, so the booking can’t be cancelled just yet. Please try again in a few minutes.",
   unconfirmed: "Tick the box to confirm.",
   error: "That couldn’t be done right now. Please contact the owner.",
 };
@@ -62,6 +72,13 @@ const PAYMENT_NOTICES: Record<string, string> = {
   conflict:
     "These dates now clash with another calendar, so payment can’t go ahead. Nothing was charged. Please contact the owner.",
   unavailable: "Online payment isn’t available for this booking right now.",
+};
+
+const PAYMENT_FIELDS = {
+  kind: payments.kind,
+  status: payments.status,
+  amountMinor: payments.amountMinor,
+  stripeCheckoutSessionId: payments.stripeCheckoutSessionId,
 };
 
 async function BookingStatus({
@@ -88,10 +105,7 @@ async function BookingStatus({
   const sessionId =
     typeof query.session_id === "string" ? query.session_id : undefined;
   let paymentRows = await ctx.db
-    .select({
-      status: payments.status,
-      stripeCheckoutSessionId: payments.stripeCheckoutSessionId,
-    })
+    .select(PAYMENT_FIELDS)
     .from(payments)
     .where(eq(payments.reservationId, reservation.id));
 
@@ -116,10 +130,7 @@ async function BookingStatus({
       );
       reservation = (await findReservationForGuest(ctx.db, ref, token))!;
       paymentRows = await ctx.db
-        .select({
-          status: payments.status,
-          stripeCheckoutSessionId: payments.stripeCheckoutSessionId,
-        })
+        .select(PAYMENT_FIELDS)
         .from(payments)
         .where(eq(payments.reservationId, reservation.id));
     } catch {
@@ -134,11 +145,25 @@ async function BookingStatus({
     {
       status: reservation.status,
       holdExpiresAt: reservation.holdExpiresAt,
-      paymentStatuses: paymentRows.map((p) => p.status),
+      paymentStatuses: paymentRows
+        .filter((p) => p.kind === "CHARGE")
+        .map((p) => p.status),
     },
     now,
   );
-  const paid = paymentRows.some((p) => p.status === "SUCCEEDED");
+  const charges = paymentRows.filter((p) => p.kind === "CHARGE");
+  const refunds = paymentRows.filter(
+    (p) =>
+      p.kind === "REFUND" && p.status !== "FAILED" && p.status !== "CANCELED",
+  );
+  const paid = charges.some((p) => p.status === "SUCCEEDED");
+  const refundConfirmedMinor = refunds
+    .filter((p) => p.status === "SUCCEEDED")
+    .reduce((sum, p) => sum + p.amountMinor, 0);
+  const refundStartedMinor = refunds.reduce((sum, p) => sum + p.amountMinor, 0);
+  const freeUntil = reservation.freeCancellationUntil;
+  const freeUntilText = freeUntil ? formatDeadline(freeUntil, timeZone) : null;
+  const freeNow = refundEligible(freeUntil, now);
   const deadline = reservation.holdExpiresAt
     ? new Intl.DateTimeFormat("en-GB", {
         dateStyle: "full",
@@ -148,13 +173,10 @@ async function BookingStatus({
     : null;
   const confirming =
     paymentStatus === "returned" &&
-    (status === "APPROVED_AWAITING_PAYMENT" ||
-      status === "HOLD_AWAITING_PAYMENT" ||
-      status === "PAYMENT_PROCESSING");
-  const canPay =
-    (status === "APPROVED_AWAITING_PAYMENT" ||
-      status === "HOLD_AWAITING_PAYMENT") &&
-    !confirming;
+    (status === "HOLD_AWAITING_PAYMENT" || status === "PAYMENT_PROCESSING");
+  const canPay = status === "HOLD_AWAITING_PAYMENT" && !confirming;
+  const booked = status === "CONFIRMED" || status === "CONFIRMED_BALANCE_DUE";
+  const money = (minor: number) => formatMoney(minor, quote.currency);
   const amountDue = formatMoney(
     quote.schedule[0]?.amountMinor ?? 0,
     quote.currency,
@@ -211,9 +233,9 @@ async function BookingStatus({
               <StatusCopy
                 status={status}
                 deadline={deadline}
-                amountDue={amountDue}
                 paid={paid}
-                wasApproved={reservation.approvedAt !== null}
+                refundStarted={money(refundStartedMinor)}
+                refundConfirmed={money(refundConfirmedMinor)}
               />
             )}
             {status === "PAYMENT_PROCESSING" && !confirming && (
@@ -244,23 +266,58 @@ async function BookingStatus({
             </p>
           ))}
 
-        {(status === "AWAITING_APPROVAL" ||
-          status === "APPROVED_AWAITING_PAYMENT" ||
-          ((status === "CONFIRMED" || status === "CONFIRMED_BALANCE_DUE") &&
-            !reservation.cancellationRequestedAt)) && (
-          <details className="rounded-soft border border-sage-300 p-4">
+        {freeUntilText && (booked || status === "HOLD_AWAITING_PAYMENT") && (
+          <div className="rounded-soft border border-sage-300 bg-sage-100/60 p-4">
+            <h3 className="font-sans text-base font-semibold text-pine-900">
+              Cancellation
+            </h3>
+            <p className="mt-1">
+              {freeNow ? (
+                <>
+                  You can cancel for a <strong>full refund</strong> until{" "}
+                  <strong>{freeUntilText}</strong> (UK time). After that, this
+                  booking is <strong>non-refundable</strong>.
+                </>
+              ) : (
+                <>
+                  The free cancellation period ended at {freeUntilText} (UK
+                  time). This booking is now <strong>non-refundable</strong>.
+                </>
+              )}
+            </p>
+          </div>
+        )}
+
+        {(status === "HOLD_AWAITING_PAYMENT" || booked) && !confirming && (
+          <details
+            className="rounded-soft border border-sage-300 p-4"
+            open={cancelStatus === "ack-required" || undefined}
+          >
             <summary className="cursor-pointer font-semibold">
-              {status === "CONFIRMED" || status === "CONFIRMED_BALANCE_DUE"
-                ? "Need to cancel?"
-                : "Withdraw this request"}
+              {booked
+                ? "Cancel this booking"
+                : "Cancel and release these dates"}
             </summary>
             <form action={guestCancelAction} className="mt-3 space-y-3">
               <input type="hidden" name="ref" value={reservation.publicRef} />
               <p className="text-sm">
-                {status === "CONFIRMED" || status === "CONFIRMED_BALANCE_DUE"
-                  ? "This sends a cancellation request to the owner. Your booking stays in place until they reply, under the cancellation policy."
-                  : "Nothing has been charged. Withdrawing releases the dates straight away."}
+                {!booked
+                  ? "Nothing has been charged. Cancelling releases the dates straight away."
+                  : freeNow
+                    ? `You’re within the free cancellation period, so everything you paid (${money(quote.totalMinor)}) will be refunded to your card. Whether a refund is due is decided by the time we receive your cancellation, so it must reach us before ${freeUntilText} (UK time).`
+                    : "The free cancellation period has ended. If you cancel now, no refund will be made."}
               </p>
+              {booked && !freeNow && (
+                <label className="flex min-h-11 items-center gap-3">
+                  <input
+                    type="checkbox"
+                    name="acknowledgeNoRefund"
+                    value="yes"
+                    className="size-5"
+                  />
+                  <span>I understand I will not receive a refund</span>
+                </label>
+              )}
               <label className="flex min-h-11 items-center gap-3">
                 <input
                   type="checkbox"
@@ -269,18 +326,16 @@ async function BookingStatus({
                   className="size-5"
                 />
                 <span>
-                  {status === "CONFIRMED" || status === "CONFIRMED_BALANCE_DUE"
-                    ? "Yes, ask the owner to cancel"
-                    : "Yes, withdraw my request"}
+                  {booked
+                    ? "Yes, cancel my booking"
+                    : "Yes, release these dates"}
                 </span>
               </label>
               <button
                 type="submit"
                 className="min-h-11 rounded-soft border border-pine-800 px-4 text-sm font-semibold text-pine-900 hover:bg-sage-100"
               >
-                {status === "CONFIRMED" || status === "CONFIRMED_BALANCE_DUE"
-                  ? "Send cancellation request"
-                  : "Withdraw request"}
+                {booked ? "Cancel booking" : "Release dates"}
               </button>
             </form>
           </details>
@@ -322,60 +377,34 @@ function dueLabels(
   status: GuestStatus,
   deadline: string | null,
 ): Partial<Record<number, string>> | undefined {
-  if (status === "AWAITING_APPROVAL")
-    return { 1: "due once the owner approves" };
-  if (status === "APPROVED_AWAITING_PAYMENT" && deadline)
-    return { 1: `due by ${deadline}` };
+  if (status === "HOLD_AWAITING_PAYMENT" && deadline)
+    return { 1: `due now (dates held until ${deadline})` };
   if (status === "CONFIRMED" || status === "CONFIRMED_BALANCE_DUE")
     return { 1: "paid" };
-  if (status === "DECLINED" || status === "EXPIRED" || status === "CANCELLED")
-    return { 1: "not due" };
+  if (status === "DECLINED" || status === "EXPIRED") return { 1: "not due" };
   return undefined;
 }
 
 function StatusCopy({
   status,
   deadline,
-  amountDue,
   paid,
-  wasApproved,
+  refundStarted,
+  refundConfirmed,
 }: {
   status: GuestStatus;
   deadline: string | null;
-  amountDue: string;
   paid: boolean;
-  wasApproved: boolean;
+  refundStarted: string;
+  refundConfirmed: string;
 }): ReactNode {
   switch (status) {
-    case "AWAITING_APPROVAL":
-      return (
-        <>
-          <p>
-            Your request has been sent to the owner.{" "}
-            <strong>Nothing has been charged</strong> and this is not yet a
-            confirmed booking.
-          </p>
-          <p>
-            The owner will reply by <strong>{deadline}</strong> (UK time), and
-            your dates are held for you until then. We&rsquo;ll email you either
-            way.
-          </p>
-        </>
-      );
-    case "APPROVED_AWAITING_PAYMENT":
-      return (
-        <p>
-          The owner has approved your request. To confirm the booking, pay the
-          full amount of <strong>{amountDue}</strong> by{" "}
-          <strong>{deadline}</strong> (UK time). Until payment has gone through,
-          the booking is not confirmed; after that time the dates are released.
-        </p>
-      );
     case "HOLD_AWAITING_PAYMENT":
       return (
         <p>
-          We&rsquo;re holding these dates until <strong>{deadline}</strong> (UK
-          time). They&rsquo;re confirmed only once payment has been verified.
+          We&rsquo;re holding these dates for you until{" "}
+          <strong>{deadline}</strong> (UK time). Your booking is confirmed only
+          once your payment has been verified; until then it is not booked.
         </p>
       );
     case "PAYMENT_PROCESSING":
@@ -403,26 +432,20 @@ function StatusCopy({
     case "DECLINED":
       return (
         <p>
-          Sorry, the owner wasn&rsquo;t able to accept this request.{" "}
-          <strong>Nothing was charged</strong> and the dates have been released.{" "}
-          <Link href="/availability" className="underline underline-offset-4">
-            Look for other dates
-          </Link>
-          .
+          Sorry, this request wasn&rsquo;t accepted.{" "}
+          <strong>Nothing was charged</strong> and the dates have been released.
         </p>
       );
     case "EXPIRED":
       return paid ? (
         <p>
           We received a payment after this booking had lapsed. The owner has
-          been alerted and will contact you.
+          been alerted, and money that isn&rsquo;t owed is refunded.
         </p>
       ) : (
         <p>
-          {wasApproved
-            ? "Payment wasn’t completed in time, so the dates have been released."
-            : "The owner wasn’t able to reply in time, so the request has lapsed."}{" "}
-          <strong>Nothing was charged.</strong>{" "}
+          Payment wasn&rsquo;t completed in time, so the dates have been
+          released. <strong>Nothing was charged.</strong>{" "}
           <Link href="/availability" className="underline underline-offset-4">
             Search again
           </Link>
@@ -430,7 +453,29 @@ function StatusCopy({
         </p>
       );
     case "CANCELLED":
-      return <p>This booking has been cancelled.</p>;
+      return (
+        <p>
+          This booking has been cancelled.
+          {paid ? " No refund is being made." : " Nothing was charged."}
+        </p>
+      );
+    case "CANCELLED_REFUND_IN_PROGRESS":
+      return (
+        <p>
+          This booking has been cancelled. A refund of{" "}
+          <strong>{refundStarted}</strong> has been started but{" "}
+          <strong>is not complete yet</strong>: we&rsquo;re waiting for the
+          payment provider to confirm it. We&rsquo;ll email you when it does.
+        </p>
+      );
+    case "CANCELLED_REFUNDED":
+      return (
+        <p>
+          This booking has been cancelled and the payment provider has confirmed
+          a refund of <strong>{refundConfirmed}</strong> to your card. It can
+          take 5–10 working days to appear on your statement.
+        </p>
+      );
     case "UNDER_REVIEW":
       return (
         <p>

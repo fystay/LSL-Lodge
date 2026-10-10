@@ -3,8 +3,8 @@
 Direct-booking website for Lodge on the Lake, a lakeside lodge at South
 Lakeland Leisure Village. It runs alongside the existing Airbnb listing.
 
-**Status:** pre-launch. Built: public site, booking engine, host-approval
-requests, owner dashboard, test-mode Stripe Checkout, email notifications
+**Status:** pre-launch. Built: public site, instant-booking engine, owner
+dashboard, test-mode Stripe Checkout, email notifications
 (off by default) and Airbnb iCal sync. No payments or emails are live, the
 booking flow is off unless explicitly enabled outside production, and the
 site is `noindex`. Property facts, prices and policies await the owner. See
@@ -12,9 +12,14 @@ docs/PLAN.md §7 for what is still open and
 [docs/LAUNCH-READINESS.md](docs/LAUNCH-READINESS.md) for the launch
 checklist.
 
-How booking works: the guest sends a request (nothing charged, dates held)
-→ the owner approves or declines in `/admin` → an approved guest pays the
-full amount on Stripe → the booking confirms only when payment is verified.
+How booking works (instant booking, no host approval): the guest picks
+available dates and enters their details → the dates are held for 35
+minutes while they pay the full amount on Stripe-hosted Checkout → the
+booking confirms only when the server has verified the payment (signed
+webhook, or a server-side fetch of the session). Guests can cancel for a full
+refund strictly within 24 hours of booking; after that the booking is
+non-refundable (src/server/booking/cancellation-policy.ts). The owner blocks
+and unblocks dates in `/admin/blocks`.
 
 - Project charter: [CLAUDE.md](CLAUDE.md)
 - Plan, data model, payment and sync design: [docs/PLAN.md](docs/PLAN.md)
@@ -79,9 +84,9 @@ The seed's prices are made up. Real rates are entered by the owner in
 `/admin/pricing`. Admin accounts need an authenticator app; see
 docs/SECURITY.md ("Admin authentication") and `scripts/admin.mts`.
 
-To try the full journey: request dates at `/availability`, approve the
-request from the `/admin` overview, then return to the booking page (same
-browser). Without Stripe keys the page says payment isn't switched on. To pay
+To try the full journey: choose dates at `/availability` and continue to
+payment. Without Stripe keys you land on the booking page, which holds the
+dates and says payment isn't switched on. To pay
 in test mode, add `STRIPE_SECRET_KEY=sk_test_…` and run `stripe listen` (see
 docs/INTEGRATIONS.md). Messages are recorded as "not sent" and can be
 previewed on the booking's admin page. Optional extras: `GUEST_LINK_SECRET`
@@ -91,8 +96,8 @@ previewed on the booking's admin page. Optional extras: `GUEST_LINK_SECRET`
 ### Scheduled jobs
 
 A scheduler must call `GET /api/jobs/tick` every 5 minutes with
-`Authorization: Bearer $CRON_SECRET`; it runs request expiry, email
-delivery, Airbnb sync and housekeeping, each under a lease so runs never
+`Authorization: Bearer $CRON_SECRET`; it runs hold expiry, email
+delivery, refund sending and retries, Airbnb sync and housekeeping, each under a lease so runs never
 overlap. An uptime monitor should call `/api/health` (with
 `HEALTHCHECK_SECRET`). **No scheduler is configured yet**; see
 [docs/SCHEDULER.md](docs/SCHEDULER.md). `/admin/system` shows every run and
@@ -133,7 +138,7 @@ src/
   lib/                 Shared, framework-free logic: dates, time zones, search validation
   server/              Server-only domain code
     admin/             Admin auth, validation schemas, queries and audited mutations
-    booking/           State machine, availability, requests/holds, owner decisions, guest links
+    booking/           State machine, availability, holds, owner blocks, cancellation policy, guest links
     jobs/              Scheduler authentication
     calendar/          iCal parsing, SSRF-safe fetch, import sync, export feed
     contact/           Enquiry validation

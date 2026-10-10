@@ -15,9 +15,12 @@ import {
   enqueueNotification,
 } from "@/server/notifications/outbox";
 import type { CheckoutSessionSnapshot, PaymentGateway } from "./gateway";
+import { queueChargeRefund } from "./refunds";
+import { formatDeadline } from "@/server/booking/cancellation-policy";
 
 /**
- * Payment lifecycle for an approved request (or an instant-mode hold).
+ * Payment lifecycle for an instant booking's hold (and, for older data, an
+ * approved request from the retired request mode).
  *
  * - startCheckout: server-side only. Re-checks state, deadline and
  *   availability, records a PENDING payment for the amount due now (from the
@@ -28,7 +31,8 @@ import type { CheckoutSessionSnapshot, PaymentGateway } from "./gateway";
  *   the session from Stripe server-side; the redirect itself proves nothing).
  *   Idempotent: applying the same session twice changes nothing.
  *
- * A reservation is confirmed only if it was APPROVED (or an instant hold),
+ * A reservation is confirmed only if it is a held PENDING_PAYMENT booking
+ * (or a legacy APPROVED request),
  * the hold has not lapsed, the amount, currency and reservation all match,
  * and no other calendar source now overlaps it. Anything else goes to the
  * owner as REQUIRES_REVIEW (or, if the dates were re-sold, the payment is
@@ -202,6 +206,9 @@ export async function startCheckout(
       successUrl: `${refPath}?payment=returned&session_id={CHECKOUT_SESSION_ID}`,
       cancelUrl: `${refPath}?payment=cancelled`,
       expiresAt: payment.checkoutExpiresAt!,
+      submitMessage: r.freeCancellationUntil
+        ? `Free cancellation until ${formatDeadline(r.freeCancellationUntil, r.timeZone)} (UK time). After that, this booking is non-refundable.`
+        : undefined,
       idempotencyKey: payment.idempotencyKey,
     });
     await db
@@ -444,8 +451,8 @@ async function lockForPayment(tx: Transaction, reservationId: string) {
     .from(reservations)
     .where(eq(reservations.id, reservationId));
   if (!ref) return null;
-  await tx
-    .select({ id: properties.id })
+  const [property] = await tx
+    .select({ timeZone: properties.timeZone })
     .from(properties)
     .where(eq(properties.id, ref.propertyId))
     .for("update");
@@ -454,7 +461,7 @@ async function lockForPayment(tx: Transaction, reservationId: string) {
     .from(reservations)
     .where(eq(reservations.id, reservationId))
     .for("update");
-  return row ?? null;
+  return row ? { ...row, timeZone: property.timeZone } : null;
 }
 
 /** True if an owner block or imported busy period now overlaps the stay. */
@@ -475,7 +482,9 @@ async function hasExternalConflict(
 }
 
 /**
- * Hands a paid-but-unconfirmable reservation to the owner. If its dates were
+ * Hands a paid-but-unconfirmable reservation to the owner. A reservation
+ * the guest or owner already cancelled can't move to review, so its payment
+ * is refunded automatically instead. If its dates were
  * taken in the meantime the exclusion constraint refuses REQUIRES_REVIEW;
  * the reservation keeps its status and the payment is flagged for refund.
  */
@@ -531,6 +540,10 @@ async function flagRefund(
     targetId: r.id,
     metadata: { reason, paymentId, status: r.status },
   });
+  // This money isn't owed for any stay (duplicate, or the booking is
+  // cancelled or its dates were re-booked): return it in full,
+  // automatically. The refund job sends it; the owner is told.
+  await queueChargeRefund(tx, paymentId, `AUTO_${reason}`, new Date());
   await alertOwner(tx, r.id, paymentId);
   return "REFUND_REQUIRED";
 }

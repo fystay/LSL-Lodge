@@ -21,7 +21,7 @@ Status key:
 | Source                                                                   | How it was read                                                                                                                                                                                                                                |
 | ------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Airbnb listing [rooms/49558875](https://www.airbnb.co.uk/rooms/49558875) | Fetched on 9 October 2026. The page's server-rendered text was readable, but only part of it: 5 of the 55 amenities, no check-in/out times, and no listing cancellation policy. The full amenities list and house rules need the owner's copy. |
-| Owner's brief (CLAUDE.md, master engineering brief)                      | Three bedrooms, sleeps up to six, two bathrooms, lake views, decking. Full payment chosen as the direct-booking model. Host approval required.                                                                                                 |
+| Owner's brief (CLAUDE.md, master engineering brief)                      | Three bedrooms, sleeps up to six, two bathrooms, lake views, decking. Full payment chosen as the direct-booking model. Host approval required (since replaced by instant booking, October 2026).                                               |
 | Owner-supplied photos (`src/content/photos.ts`)                          | 21 photos supplied with permission in October 2026.                                                                                                                                                                                            |
 | Existing preview site [lsllodge.vercel.app](https://lsllodge.vercel.app) | Fetched on 9 October 2026. It shows booking as "not open yet" and unconfirmed facts as "To be confirmed". It is consistent with this register.                                                                                                 |
 
@@ -69,24 +69,23 @@ assumed to apply to direct bookings.
 None of these may be invented. Until the owner enters them in `/admin`,
 quoting fails with a clear "not configured" message.
 
-| Item                                | Status                                                                                                                       |
-| ----------------------------------- | ---------------------------------------------------------------------------------------------------------------------------- |
-| Booking mode                        | **Owner-confirmed: host approval required.** Instant booking is built but disabled (see PLAN.md §8).                         |
-| Payment model                       | **Owner-confirmed in principle: full payment**, collected only after approval. Timing windows below still need confirmation. |
-| Currency                            | GBP assumed from the UK location and Airbnb .co.uk listing. Owner to confirm.                                                |
-| Nightly / seasonal rates            | Unknown. The local seed data is clearly fake and refuses to run outside localhost.                                           |
-| Minimum stay                        | Unknown. The site shows a 2-night search default only as a placeholder.                                                      |
-| Cleaning and other fees             | Unknown                                                                                                                      |
-| Extra-guest charges, discounts      | Unknown                                                                                                                      |
-| Taxes (VAT etc.)                    | Unknown. Needs the owner's accountant.                                                                                       |
-| Security/damage deposit             | Unknown                                                                                                                      |
-| Owner response time for requests    | Default **24 hours** (configurable in admin). Operational default, needs confirmation.                                       |
-| Guest payment window after approval | Default **24 hours** (configurable in admin). Operational default, needs confirmation.                                       |
-| Cancellation and refund policy      | Unknown. Airbnb's policy is not assumed. `/cancellation-policy` shows a draft notice.                                        |
-| No-show and amendment policy        | Unknown                                                                                                                      |
-| Refund timing                       | Unknown                                                                                                                      |
-| Booking terms                       | Unknown. `/terms` shows a draft notice. Legal review recommended.                                                            |
-| Licensing / compliance              | Unknown (e.g. any local short-let registration, leisure-village owner rules on letting, insurance). Owner to confirm.        |
+| Item                           | Status                                                                                                                                                                                           |
+| ------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Booking mode                   | **Owner-confirmed (October 2026): instant booking**, no host approval. Replaced the earlier host-approval mode (see PLAN.md §8).                                                                 |
+| Payment model                  | **Owner-confirmed: full payment upfront**, confirmed only on verified payment.                                                                                                                   |
+| Currency                       | GBP assumed from the UK location and Airbnb .co.uk listing. Owner to confirm.                                                                                                                    |
+| Nightly / seasonal rates       | Unknown. The local seed data is clearly fake and refuses to run outside localhost.                                                                                                               |
+| Minimum stay                   | Unknown. The site shows a 2-night search default only as a placeholder.                                                                                                                          |
+| Cleaning and other fees        | Unknown                                                                                                                                                                                          |
+| Extra-guest charges, discounts | Unknown                                                                                                                                                                                          |
+| Taxes (VAT etc.)               | Unknown. Needs the owner's accountant.                                                                                                                                                           |
+| Security/damage deposit        | Unknown                                                                                                                                                                                          |
+| Hold while the guest pays      | **35 minutes** (Stripe needs at least 30). Operational default, needs confirmation.                                                                                                              |
+| Cancellation and refund policy | **Owner-confirmed:** full refund if the guest cancels within 24 hours of submitting the booking; non-refundable after that. Published on `/cancellation-policy`; legal review still recommended. |
+| No-show and amendment policy   | Unknown                                                                                                                                                                                          |
+| Refund timing                  | 24-hour refunds are sent to Stripe automatically; bank timing is outside our control.                                                                                                            |
+| Booking terms                  | Unknown. `/terms` shows a draft notice. Legal review recommended.                                                                                                                                |
+| Licensing / compliance         | Unknown (e.g. any local short-let registration, leisure-village owner rules on letting, insurance). Owner to confirm.                                                                            |
 
 ## Missing or conflicting information
 
@@ -107,7 +106,5 @@ See also [OWNER-DECISIONS.md](OWNER-DECISIONS.md).
 
 - Every row marked "Listing states", "Inferred" or "Unknown" above.
 - Rates, fees, minimum stay, taxes and currency, entered in `/admin/pricing`.
-- Response and payment windows for host-approved requests (defaults 24 h / 24 h).
-- Cancellation, refund, no-show and amendment policy; booking terms.
-- Whether payment may ever be taken before approval (not the default; see PLAN.md §8 for the trade-offs).
-- When, if ever, to enable instant booking.
+- Hold length while the guest pays (default 35 minutes).
+- Owner-cancellation, no-show and amendment terms; booking terms; legal review of the 24-hour policy wording.

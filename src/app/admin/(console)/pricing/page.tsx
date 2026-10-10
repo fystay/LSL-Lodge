@@ -347,101 +347,22 @@ async function Pricing({
       </AdminSection>
 
       <AdminSection id="policy" title="Payment plan">
-        <p className="mb-4">
-          Current:{" "}
-          <strong>
-            {!policy
-              ? "none set (bookings can't be taken)"
-              : policy.mode === "FULL"
-                ? "full payment when booking"
-                : `${policy.depositBasisPoints != null ? `${policy.depositBasisPoints / 100}%` : formatMoney(policy.depositFixedMinor ?? 0)} deposit, balance ${policy.balanceDueDaysBeforeCheckIn} days before arrival`}
-          </strong>
-          {policy ? ` (v${policy.version})` : ""}
+        <p>
+          Guests pay the <strong>full amount when they book</strong>. The
+          booking is confirmed once Stripe verifies the payment. Deposit plans
+          are switched off for instant booking.
         </p>
-        <form
-          action={savePaymentPolicyAction}
-          className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3"
-        >
-          <Field label="Plan" name="mode">
-            <select
-              id="mode"
-              name="mode"
-              defaultValue={policy?.mode ?? "DEPOSIT"}
-              className={inputClass}
-            >
-              <option value="FULL">Full payment when booking</option>
-              <option value="DEPOSIT">Deposit, then balance</option>
-            </select>
-          </Field>
-          <Field label="Deposit (%)" name="depositPercent">
-            <input
-              id="depositPercent"
-              name="depositPercent"
-              inputMode="decimal"
-              defaultValue={
-                policy?.depositBasisPoints != null
-                  ? policy.depositBasisPoints / 100
-                  : ""
-              }
-              className={inputClass}
-            />
-          </Field>
-          <Field label="…or fixed deposit (£)" name="depositFixed">
-            <input
-              id="depositFixed"
-              name="depositFixed"
-              inputMode="decimal"
-              defaultValue={
-                policy?.depositFixedMinor != null
-                  ? penceToPounds(policy.depositFixedMinor)
-                  : ""
-              }
-              className={inputClass}
-            />
-          </Field>
-          <Field label="Minimum deposit (£, optional)" name="minimumDeposit">
-            <input
-              id="minimumDeposit"
-              name="minimumDeposit"
-              inputMode="decimal"
-              defaultValue={
-                policy?.minimumDepositMinor != null
-                  ? penceToPounds(policy.minimumDepositMinor)
-                  : ""
-              }
-              className={inputClass}
-            />
-          </Field>
-          <Field
-            label="Balance due (days before arrival)"
-            name="balanceDueDays"
-          >
-            <input
-              id="balanceDueDays"
-              name="balanceDueDays"
-              inputMode="numeric"
-              defaultValue={policy?.balanceDueDaysBeforeCheckIn ?? ""}
-              className={inputClass}
-            />
-          </Field>
-          <Field
-            label="Full payment if booking within (days)"
-            name="fullPaymentWithinDays"
-          >
-            <input
-              id="fullPaymentWithinDays"
-              name="fullPaymentWithinDays"
-              inputMode="numeric"
-              defaultValue={policy?.fullPaymentWithinDays ?? ""}
-              className={inputClass}
-            />
-          </Field>
-          <div className="sm:col-span-2 lg:col-span-3">
+        {!policy && (
+          <form action={savePaymentPolicyAction} className="mt-4">
+            <input type="hidden" name="mode" value="FULL" />
+            <p className="mb-3 text-sm text-ink-muted">
+              No payment plan is saved yet, so bookings can&rsquo;t be taken.
+            </p>
             <button type="submit" className={primaryButton}>
-              Save payment plan
+              Use full payment when booking
             </button>
-          </div>
-        </form>
+          </form>
+        )}
       </AdminSection>
     </div>
   );

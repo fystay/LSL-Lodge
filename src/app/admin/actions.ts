@@ -2,8 +2,12 @@
 
 import type { Route } from "next";
 import { redirect } from "next/navigation";
-import { createOwnerBlock, removeOwnerBlock } from "@/server/booking/holds";
-import { approveRequest, declineRequest } from "@/server/booking/requests";
+import {
+  createOwnerBlock,
+  removeOwnerBlock,
+  updateOwnerBlock,
+  type OwnerBlockResult,
+} from "@/server/booking/holds";
 import {
   cancelByOwner,
   confirmReviewedBooking,
@@ -71,6 +75,21 @@ const uuid = (value: FormDataEntryValue | null) => {
 
 // --- Owner blocks -------------------------------------------------------------------
 
+function blockError(result: Exclude<OwnerBlockResult, { ok: true }>) {
+  switch (result.reason) {
+    case "CONFLICTS_WITH_BOOKING":
+      return `Not blocked: those dates overlap ${result.bookings
+        .map((b) => `booking ${b.publicRef} (${b.checkIn} to ${b.checkOut})`)
+        .join(
+          ", ",
+        )}. Bookings are never cancelled or changed by blocking: cancel or resolve the booking first, then block the dates.`;
+    case "NOT_FOUND":
+      return "That block no longer exists.";
+    default:
+      return "The end date must be after the start date.";
+  }
+}
+
 export async function addOwnerBlockAction(form: FormData) {
   const ctx = await ready("/admin/blocks");
   const parsed = ownerBlockSchema.safeParse(Object.fromEntries(form));
@@ -81,14 +100,25 @@ export async function addOwnerBlockAction(form: FormData) {
     ...parsed.data,
     createdBy: ctx.admin.email,
   });
-  if (!result.ok)
-    back("/admin/blocks", {
-      error:
-        result.reason === "CONFLICTS_WITH_BOOKING"
-          ? "Those dates overlap a booking or live hold. Resolve the booking first."
-          : "The end date must be after the start date.",
-    });
+  if (!result.ok) back("/admin/blocks", { error: blockError(result) });
   back("/admin/blocks", { saved: "Dates blocked." });
+}
+
+export async function updateOwnerBlockAction(form: FormData) {
+  const ctx = await ready("/admin/blocks");
+  const id = uuid(form.get("id"));
+  if (!id) back("/admin/blocks", { error: "Unknown block." });
+  const parsed = ownerBlockSchema.safeParse(Object.fromEntries(form));
+  if (!parsed.success)
+    back("/admin/blocks", { error: firstError(parsed.error) });
+  const result = await updateOwnerBlock(ctx.db, {
+    propertyId: ctx.property.id,
+    id,
+    ...parsed.data,
+    actor: ctx.admin.email,
+  });
+  if (!result.ok) back("/admin/blocks", { error: blockError(result) });
+  back("/admin/blocks", { saved: "Block updated." });
 }
 
 export async function removeOwnerBlockAction(form: FormData) {
@@ -105,8 +135,6 @@ export async function removeOwnerBlockAction(form: FormData) {
   );
 }
 
-// --- Booking requests -----------------------------------------------------------------
-
 const CONFLICT_SOURCE: Record<string, string> = {
   OWNER_BLOCK: "one of your blocked periods",
   AIRBNB_ICAL: "an Airbnb booking",
@@ -114,55 +142,8 @@ const CONFLICT_SOURCE: Record<string, string> = {
   OTHER_ICAL: "an imported calendar",
   CHANNEL_MANAGER: "a channel-manager booking",
   DIRECT_BOOKING: "another booking",
-  HOLD: "another request",
+  HOLD: "a booking awaiting payment",
 };
-
-export async function approveRequestAction(form: FormData) {
-  const ctx = await ready("/admin");
-  const id = uuid(form.get("id"));
-  if (!id) back("/admin/bookings", { error: "Unknown booking." });
-  const path = `/admin/bookings/${id}`;
-  const result = await approveRequest(ctx.db, {
-    propertyId: ctx.property.id,
-    reservationId: id,
-    actor: ctx.admin.email,
-    ownerNote: String(form.get("ownerNote") ?? ""),
-  });
-  if (result.ok)
-    back(path, {
-      saved:
-        "Approved. The guest has been asked to pay; the booking confirms only when payment is verified.",
-    });
-  back(path, {
-    error:
-      result.reason === "CONFLICT"
-        ? `Can’t approve: the dates now overlap ${result.sources.map((s) => CONFLICT_SOURCE[s] ?? s).join(" and ")}. Decline the request or resolve the clash first.`
-        : result.reason === "EXPIRED"
-          ? "This request lapsed before it was approved; its dates have been released."
-          : "This request has already been decided.",
-  });
-}
-
-export async function declineRequestAction(form: FormData) {
-  const ctx = await ready("/admin");
-  const id = uuid(form.get("id"));
-  if (!id) back("/admin/bookings", { error: "Unknown booking." });
-  const path = `/admin/bookings/${id}`;
-  if (form.get("confirm") !== "yes")
-    back(path, { error: "Tick the box to confirm you want to decline." });
-  const result = await declineRequest(ctx.db, {
-    propertyId: ctx.property.id,
-    reservationId: id,
-    actor: ctx.admin.email,
-    ownerNote: String(form.get("ownerNote") ?? ""),
-  });
-  back(
-    path,
-    result.ok
-      ? { saved: "Declined. The dates are free again and nothing was charged." }
-      : { error: "This request has already been decided." },
-  );
-}
 
 // --- Resolving bookings, cancellations and refunds ----------------------------------------
 // All of these involve money or a guest's stay, so they need a fresh code.
@@ -241,16 +222,18 @@ export async function refundAction(form: FormData) {
     back(path, {
       saved:
         result.status === "SUCCEEDED"
-          ? "Refund issued."
-          : "Refund requested; Stripe is processing it.",
+          ? "Refund issued: Stripe confirmed it."
+          : result.status === "FAILED"
+            ? "Stripe refused the refund. See the payment list below."
+            : result.status === "PENDING"
+              ? "Refund recorded, but Stripe couldn’t be reached. It will be retried automatically; it is not complete yet."
+              : "Refund requested; Stripe is processing it. It is not complete until Stripe confirms.",
     });
   back(path, {
     error:
       result.reason === "INVALID_AMOUNT"
         ? `Enter an amount up to the £${penceToPounds(result.refundableMinor ?? 0)} still refundable on that payment.`
-        : result.reason === "PROVIDER_ERROR"
-          ? "Stripe didn’t accept the refund. Nothing was refunded; try again shortly."
-          : "That payment can’t be refunded.",
+        : "That payment can’t be refunded.",
   });
 }
 
@@ -471,6 +454,11 @@ export async function savePaymentPolicyAction(form: FormData) {
   const parsed = paymentPolicySchema.safeParse(Object.fromEntries(form));
   if (!parsed.success)
     back("/admin/pricing", { error: firstError(parsed.error) });
+  // Instant booking is pay-in-full only.
+  if (parsed.data.mode !== "FULL")
+    back("/admin/pricing", {
+      error: "Instant booking takes full payment; deposit plans are off.",
+    });
   await savePaymentPolicy(
     ctx.db,
     ctx.property.id,

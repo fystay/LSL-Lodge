@@ -10,10 +10,17 @@ Facts gathered so far, with sources: [property-facts-and-policies.md](property-f
 
 ## Already decided
 
-- [x] **Booking mode: host approval.** Guests send a request; you approve or
-      decline; nothing is charged before approval. Instant booking is built
-      but switched off.
-- [x] **Payment model: full payment**, collected after approval.
+- [x] **Booking mode: instant booking** (October 2026, replacing host
+      approval). Guests pay in full when they book; the booking confirms
+      once Stripe's payment is verified. You control availability by
+      blocking dates.
+- [x] **Payment model: full payment upfront.** Deposit plans are switched
+      off.
+- [x] **Guest cancellation policy:** full refund if the guest cancels
+      within 24 hours of submitting the booking; non-refundable after that.
+      The 24 hours run from when the booking is submitted, the deadline is
+      fixed then, and a cancellation exactly at the deadline is not
+      refundable. Refunds within the window are sent automatically.
 
 ## Blocking test-mode payments and email (accounts)
 
@@ -39,24 +46,28 @@ Facts gathered so far, with sources: [property-facts-and-policies.md](property-f
 - [ ] **Tax treatment**: whether prices include VAT or any other tax (ask
       your accountant). Currency assumed GBP: confirm.
 - [ ] **Minimum stay**, check-in and check-out times, turnover buffer.
-- [ ] **Response window**: how long you have to answer a request (default
-      24 hours; dates are held meanwhile).
-- [ ] **Payment window**: how long an approved guest has to pay (default 24
-      hours).
-- [ ] **Cancellation, refund, no-show and amendment policy**, including
-      owner cancellations and refund timing. Airbnb's policy is not assumed.
-      Legal review recommended.
+- [ ] **Hold length**: dates are held for 35 minutes while the guest pays
+      (Stripe needs at least 30). Confirm, or choose another length.
+- [ ] **Rest of the cancellation terms**: what happens if _you_ cancel a
+      guest's stay, no-shows, amendments (date changes), and whether Stripe's
+      processing fee is absorbed on 24-hour refunds (today the guest gets
+      everything back). Legal review recommended, including whether the
+      24-hour policy needs wording for UK consumer law.
+- [ ] **Stale Airbnb feed**: with no approval step, should online booking
+      pause automatically while the Airbnb import is failing or out of date?
+      (Today guests see a "running behind" note and bookings continue; a
+      clash found at payment goes to you for review.)
 - [ ] **Booking terms** (legal review recommended).
 - [ ] **Guest data**: name and email by default; phone optional. Anything
       else (address, age of lead guest)?
-- [ ] **Late payments**: if a payment arrives after a booking lapsed, it is
-      flagged to you. Confirm your rule: honour the booking if the dates are
-      free, or always refund?
-- [ ] **Refund amounts** once your cancellation policy is set. Until then
-      you choose each refund amount yourself in admin.
-- [ ] **Email wording**: the draft messages (request received, approved,
-      declined, cancelled, confirmed and so on) need your approval before
-      real emails are switched on. Admin shows a preview of each.
+- [ ] **Late payments**: if a payment arrives after a hold lapsed and the
+      dates are still free, it is flagged to you to honour or refund (if
+      the dates were re-booked, or the guest had cancelled, it is refunded
+      automatically). Confirm your rule.
+- [ ] **Email wording**: the draft messages (confirmed with the cancellation
+      deadline, cancelled, refund completed, payment failed and so on) need
+      your approval before real emails are switched on. Admin shows a
+      preview of each.
 
 ## Blocking calendars
 
@@ -65,7 +76,8 @@ Facts gathered so far, with sources: [property-facts-and-policies.md](property-f
 - [ ] Add the site's **export link** (shown in `/admin/calendars` once
       `CALENDAR_EXPORT_SECRET` is set) to Airbnb's "Import calendar".
 - [ ] **Is the iCal delay acceptable?** Airbnb updates its feeds on its own
-      schedule (see INTEGRATIONS.md). Your approval step is a safety net. If
+      schedule (see INTEGRATIONS.md). With instant booking there is no
+      approval step to catch a clash before payment. If
       the delay is not acceptable, choose a budget for a channel manager with
       an official Airbnb connection.
 - [ ] **Google Calendar**: which account and calendars to read busy times

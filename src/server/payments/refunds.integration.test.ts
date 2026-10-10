@@ -3,9 +3,13 @@ import { eq } from "drizzle-orm";
 import Stripe from "stripe";
 import { afterAll, beforeEach, describe, expect, it } from "vitest";
 import { parseIsoDate as d } from "@/lib/dates";
-import { notificationJobs, payments, reservations } from "@/server/db/schema";
+import {
+  auditLogs,
+  notificationJobs,
+  payments,
+  reservations,
+} from "@/server/db/schema";
 import { createHold, expireLapsedHolds } from "@/server/booking/holds";
-import { approveRequest } from "@/server/booking/requests";
 import {
   cancelByOwner,
   confirmReviewedBooking,
@@ -19,7 +23,12 @@ import {
   testDatabase,
 } from "../../../tests/support/test-db";
 import { applyCheckoutSession, startCheckout } from "./checkout";
-import { issueRefund } from "./refunds";
+import {
+  REFUND_MAX_ATTEMPTS,
+  issueRefund,
+  processPendingRefunds,
+  sendRefund,
+} from "./refunds";
 import { verifyStripeWebhook } from "./stripe-webhook";
 import { processStripeEvent } from "./webhook";
 
@@ -30,6 +39,10 @@ beforeEach(async () => resetTables(db));
 // Synthetic data only; the gateway is in memory.
 const NOW = new Date("2026-10-08T12:00:00Z");
 const HOUR = 3_600_000;
+/** Unpaid holds last 35 minutes; this is safely past that. */
+const LAPSED = 40 * 60_000;
+/** The free-cancellation deadline for a booking requested at NOW. */
+const DEADLINE = new Date(NOW.getTime() + 24 * HOUR);
 const OWNER = "owner@example.test";
 const BASE = "http://localhost:3000";
 
@@ -46,7 +59,7 @@ async function request(
     idempotencyKey: randomUUID(),
     now: NOW,
   });
-  if (!r.ok) throw new Error("expected request");
+  if (!r.ok) throw new Error("expected hold");
   return r.reservationId;
 }
 
@@ -54,15 +67,15 @@ async function request(
 async function paidBooking() {
   const property = await createBookableProperty(db);
   const reservationId = await request(property.id);
-  await approveRequest(db, {
-    propertyId: property.id,
-    reservationId,
-    actor: OWNER,
-    now: NOW,
-  });
   const gateway = new FakeGateway();
-  await startCheckout(db, gateway, { reservationId, baseUrl: BASE, now: NOW });
-  await applyCheckoutSession(db, gateway.pay(gateway.latest().id), NOW);
+  // Paid 10 minutes after booking: the 24 hours still run from the booking.
+  const paidAt = new Date(NOW.getTime() + 10 * 60_000);
+  await startCheckout(db, gateway, {
+    reservationId,
+    baseUrl: BASE,
+    now: paidAt,
+  });
+  await applyCheckoutSession(db, gateway.pay(gateway.latest().id), paidAt);
   const [charge] = await db
     .select()
     .from(payments)
@@ -241,25 +254,88 @@ describe("owner cancellation and refunds", () => {
     expect(r.reviewReason).toBeNull();
   });
 
-  it("records a refund Stripe refused, so the amount can be refunded again", async () => {
+  it("retries a refund Stripe couldn't take, with the same idempotency key", async () => {
     const { property, reservationId, gateway, charge } = await paidBooking();
     gateway.failRefunds = true;
-    const args = {
+    expect(
+      await issueRefund(db, gateway, {
+        propertyId: property.id,
+        reservationId,
+        chargePaymentId: charge.id,
+        amountMinor: 30_000,
+        actor: OWNER,
+        now: NOW,
+      }),
+    ).toEqual({ ok: true, status: "PENDING" });
+    let [row] = await db
+      .select()
+      .from(payments)
+      .where(eq(payments.kind, "REFUND"));
+    expect(row).toMatchObject({ status: "PENDING", providerAttempts: 1 });
+    // Not complete, and not retried before its back-off.
+    expect((await load(reservationId)).status).not.toBe("REFUNDED");
+    expect(await processPendingRefunds(db, gateway, NOW)).toEqual({
+      sent: 0,
+      skipped: 0,
+    });
+
+    gateway.failRefunds = false;
+    const later = new Date(NOW.getTime() + HOUR);
+    expect(await processPendingRefunds(db, gateway, later)).toEqual({
+      sent: 1,
+      skipped: 0,
+    });
+    [row] = await db.select().from(payments).where(eq(payments.id, row.id));
+    expect(row.status).toBe("SUCCEEDED");
+    expect(gateway.refunds.size).toBe(1);
+    // Running again (or a duplicate job) sends nothing more.
+    expect(await processPendingRefunds(db, gateway, later)).toEqual({
+      sent: 0,
+      skipped: 0,
+    });
+    expect(gateway.refunds.size).toBe(1);
+  });
+
+  it("gives up after repeated failures, marks the refund failed and alerts the owner", async () => {
+    const { property, reservationId, gateway, charge } = await paidBooking();
+    gateway.failRefunds = true;
+    await issueRefund(db, gateway, {
       propertyId: property.id,
       reservationId,
       chargePaymentId: charge.id,
       amountMinor: 30_000,
       actor: OWNER,
-    };
-    expect(await issueRefund(db, gateway, args)).toEqual({
-      ok: false,
-      reason: "PROVIDER_ERROR",
     });
+    const [refund] = await db
+      .select()
+      .from(payments)
+      .where(eq(payments.kind, "REFUND"));
+    let at = NOW;
+    for (let i = 1; i < REFUND_MAX_ATTEMPTS; i++) {
+      at = new Date(at.getTime() + 2 * HOUR);
+      await sendRefund(db, gateway, refund.id, at);
+    }
+    const [row] = await db
+      .select()
+      .from(payments)
+      .where(eq(payments.id, refund.id));
+    expect(row).toMatchObject({
+      status: "FAILED",
+      providerAttempts: REFUND_MAX_ATTEMPTS,
+    });
+    expect((await load(reservationId)).reviewReason).toBe("REFUND_FAILED");
+    expect(await templates(reservationId)).toContain("owner_refund_failed");
+    // A failed refund doesn't count: the amount can be refunded again.
     gateway.failRefunds = false;
-    expect(await issueRefund(db, gateway, args)).toEqual({
-      ok: true,
-      status: "SUCCEEDED",
-    });
+    expect(
+      await issueRefund(db, gateway, {
+        propertyId: property.id,
+        reservationId,
+        chargePaymentId: charge.id,
+        amountMinor: 30_000,
+        actor: OWNER,
+      }),
+    ).toEqual({ ok: true, status: "SUCCEEDED" });
   });
 
   it("can't refund an unpaid or someone else's charge", async () => {
@@ -283,19 +359,13 @@ describe("resolving flagged bookings", () => {
   it("confirms a late but full payment once the owner reviews it", async () => {
     const property = await createBookableProperty(db);
     const reservationId = await request(property.id);
-    await approveRequest(db, {
-      propertyId: property.id,
-      reservationId,
-      actor: OWNER,
-      now: NOW,
-    });
     const gateway = new FakeGateway();
     await startCheckout(db, gateway, {
       reservationId,
       baseUrl: BASE,
       now: NOW,
     });
-    await expireLapsedHolds(db, null, new Date(NOW.getTime() + 25 * HOUR));
+    await expireLapsedHolds(db, null, new Date(NOW.getTime() + LAPSED));
     await applyCheckoutSession(db, gateway.pay(gateway.latest().id), NOW);
     expect((await load(reservationId)).status).toBe("REQUIRES_REVIEW");
 
@@ -355,44 +425,177 @@ describe("resolving flagged bookings", () => {
   });
 });
 
-describe("guest cancellation", () => {
-  it("withdraws an unpaid request at once and tells the owner", async () => {
+describe("guest cancellation under the 24-hour policy", () => {
+  const cancel = (
+    propertyId: string,
+    reservationId: string,
+    receivedAt: Date,
+    acknowledgeNoRefund = false,
+  ) =>
+    guestCancel(db, {
+      propertyId,
+      reservationId,
+      receivedAt,
+      acknowledgeNoRefund,
+    });
+  const refundRows = (reservationId: string) =>
+    db
+      .select()
+      .from(payments)
+      .where(eq(payments.reservationId, reservationId))
+      .then((rows) => rows.filter((p) => p.kind === "REFUND"));
+
+  it("releases an unpaid hold at once", async () => {
     const property = await createBookableProperty(db);
     const reservationId = await request(property.id);
-    expect(
-      await guestCancel(db, {
-        propertyId: property.id,
-        reservationId,
-        now: NOW,
-      }),
-    ).toMatchObject({
+    expect(await cancel(property.id, reservationId, NOW)).toMatchObject({
       ok: true,
-      outcome: "WITHDRAWN",
+      outcome: "HOLD_RELEASED",
     });
-    expect((await load(reservationId)).status).toBe("CANCELLED");
-    expect(await templates(reservationId)).toContain("owner_booking_withdrawn");
+    const r = await load(reservationId);
+    expect([r.status, r.cancelledBy]).toEqual(["CANCELLED", "GUEST"]);
+    expect(await refundRows(reservationId)).toHaveLength(0);
+    // The dates are bookable again.
+    expect(await request(property.id)).toBeTruthy();
   });
 
-  it("only records a request to cancel a paid booking, once", async () => {
-    const { property, reservationId } = await paidBooking();
-    for (let i = 0; i < 2; i++)
-      expect(
-        await guestCancel(db, {
-          propertyId: property.id,
-          reservationId,
-          now: NOW,
-        }),
-      ).toEqual({
-        ok: true,
-        outcome: "REQUESTED",
-      });
-    const r = await load(reservationId);
-    expect(r.status).toBe("CONFIRMED");
-    expect(r.cancellationRequestedAt).not.toBeNull();
+  it("refunds in full 1 ms before the deadline, and only once Stripe confirms is it refunded", async () => {
+    const { property, reservationId, gateway } = await paidBooking();
+    gateway.refundStatus = "pending";
+    const justBefore = new Date(DEADLINE.getTime() - 1);
+    const result = await cancel(property.id, reservationId, justBefore);
+    expect(result).toMatchObject({
+      ok: true,
+      outcome: "CANCELLED_WITH_REFUND",
+      refundMinor: 30_000,
+    });
+    if (!result.ok || result.outcome !== "CANCELLED_WITH_REFUND") return;
+    // Queued in the same transaction as the cancellation.
     expect(
-      (await templates(reservationId)).filter(
-        (t) => t === "owner_cancellation_requested",
-      ),
-    ).toHaveLength(1);
+      (await refundRows(reservationId)).map((p) => [
+        p.status,
+        p.amountMinor,
+        p.initiatedBy,
+      ]),
+    ).toEqual([["PENDING", 30_000, "GUEST_POLICY"]]);
+    expect((await load(reservationId)).status).toBe("REFUND_PENDING");
+
+    expect(await sendRefund(db, gateway, result.refundIds[0], justBefore)).toBe(
+      "PROCESSING",
+    );
+    // Sent, but Stripe hasn't confirmed: still not "refunded".
+    expect((await load(reservationId)).status).toBe("REFUND_PENDING");
+    expect(await templates(reservationId)).not.toContain("refund_completed");
+
+    const [stripeRefund] = [...gateway.refunds.values()];
+    stripeRefund.status = "succeeded";
+    const { applyRefundSnapshot } = await import("./refunds");
+    await applyRefundSnapshot(db, stripeRefund);
+    const r = await load(reservationId);
+    expect([r.status, r.cancelledBy]).toEqual(["REFUNDED", "GUEST"]);
+    expect(await templates(reservationId)).toEqual(
+      expect.arrayContaining([
+        "guest_cancellation_confirmed",
+        "owner_guest_cancelled",
+        "refund_completed",
+      ]),
+    );
+
+    const [entry] = await db
+      .select()
+      .from(auditLogs)
+      .where(eq(auditLogs.action, "reservation.cancelled_by_guest"));
+    expect(entry.metadata).toMatchObject({
+      receivedAt: justBefore.toISOString(),
+      freeCancellationUntil: DEADLINE.toISOString(),
+      refundEligible: true,
+      refundMinor: 30_000,
+    });
+  });
+
+  for (const [label, at] of [
+    ["exactly at", DEADLINE],
+    ["1 ms after", new Date(DEADLINE.getTime() + 1)],
+  ] as const)
+    it(`is non-refundable ${label} the deadline, and needs the guest's acknowledgement`, async () => {
+      const { property, reservationId, gateway } = await paidBooking();
+      expect(await cancel(property.id, reservationId, at)).toEqual({
+        ok: false,
+        reason: "ACK_REQUIRED",
+      });
+      expect((await load(reservationId)).status).toBe("CONFIRMED");
+
+      expect(await cancel(property.id, reservationId, at, true)).toEqual({
+        ok: true,
+        outcome: "CANCELLED_NO_REFUND",
+      });
+      const r = await load(reservationId);
+      expect([r.status, r.reviewReason]).toEqual(["CANCELLED", null]);
+      expect(await refundRows(reservationId)).toHaveLength(0);
+      expect(gateway.refunds.size).toBe(0);
+      expect(await templates(reservationId)).toEqual(
+        expect.arrayContaining([
+          "guest_cancellation_confirmed",
+          "owner_guest_cancelled",
+        ]),
+      );
+    });
+
+  it("counts the 24 hours from the booking, not from the payment", async () => {
+    // paidBooking pays 10 minutes after booking; 24 h after payment is late.
+    const { property, reservationId } = await paidBooking();
+    const dayAfterPayment = new Date(NOW.getTime() + 24 * HOUR + 5 * 60_000);
+    expect(await cancel(property.id, reservationId, dayAfterPayment)).toEqual({
+      ok: false,
+      reason: "ACK_REQUIRED",
+    });
+  });
+
+  it("can't cancel twice or refund twice, even concurrently", async () => {
+    const { property, reservationId } = await paidBooking();
+    const at = new Date(NOW.getTime() + HOUR);
+    const results = await Promise.all(
+      Array.from({ length: 4 }, () => cancel(property.id, reservationId, at)),
+    );
+    expect(results.filter((r) => r.ok)).toHaveLength(1);
+    expect(
+      results.filter((r) => !r.ok && r.reason === "NOT_ALLOWED"),
+    ).toHaveLength(3);
+    expect(await refundRows(reservationId)).toHaveLength(1);
+  });
+
+  it("waits while a payment is still settling", async () => {
+    const { property, reservationId } = await paidBooking();
+    await db.insert(payments).values({
+      reservationId,
+      kind: "CHARGE",
+      purpose: "FULL",
+      status: "PROCESSING",
+      amountMinor: 100,
+      currency: "GBP",
+      idempotencyKey: `processing-${randomUUID()}`,
+    });
+    expect(await cancel(property.id, reservationId, NOW)).toEqual({
+      ok: false,
+      reason: "PAYMENT_PROCESSING",
+    });
+  });
+
+  it("leaves owner cancellations to the owner's refund decision", async () => {
+    const { property, reservationId, gateway } = await paidBooking();
+    await cancelByOwner(db, {
+      propertyId: property.id,
+      reservationId,
+      actor: OWNER,
+      now: NOW,
+    });
+    const r = await load(reservationId);
+    expect(r.cancelledBy).toBe(`OWNER:${OWNER}`);
+    expect(await refundRows(reservationId)).toHaveLength(0);
+    expect(gateway.refunds.size).toBe(0);
+    expect(await cancel(property.id, reservationId, NOW)).toEqual({
+      ok: false,
+      reason: "NOT_ALLOWED",
+    });
   });
 });

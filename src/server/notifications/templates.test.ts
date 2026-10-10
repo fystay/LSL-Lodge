@@ -17,6 +17,8 @@ const data: TemplateData = {
   deadline: "Saturday 10 October 2026 at 12:00",
   bookingUrl: "https://example.test/book/LL-ABC234/access?t=g1.1.abc",
   adminUrl: "https://example.test/admin/bookings/x",
+  freeCancellationUntil: "2:32pm on Saturday 10 October 2026",
+  refundAmount: "£300.00",
 };
 
 const templates = Object.keys(
@@ -29,7 +31,7 @@ describe("email templates", () => {
       const { html } = renderEmail(t, data);
       expect(html, t).not.toContain("<script>");
     }
-    expect(renderEmail("request_received", data).html).toContain(
+    expect(renderEmail("booking_confirmed", data).html).toContain(
       "Ann &lt;script&gt;alert(&quot;x&quot;)&lt;/script&gt; &amp; Co",
     );
   });
@@ -43,23 +45,36 @@ describe("email templates", () => {
     }
   });
 
-  it("never tells a guest a request is confirmed before payment", () => {
-    for (const t of [
-      "request_received",
-      "request_approved",
-      "payment_failed",
-    ] as const) {
-      const { text, subject } = renderEmail(t, data);
-      expect(`${subject} ${text}`).not.toMatch(
-        /booking is confirmed\b(?! only)/i,
-      );
-    }
-    expect(renderEmail("request_received", data).text).toContain(
-      "nothing has been charged",
+  it("never tells a guest a booking is confirmed before payment", () => {
+    const { text, subject } = renderEmail("payment_failed", data);
+    expect(`${subject} ${text}`).not.toMatch(
+      /booking is confirmed\b(?! only)/i,
     );
     expect(renderEmail("booking_confirmed", data).text).toContain(
       "Your booking is confirmed",
     );
+  });
+
+  it("states the free-cancellation deadline in the confirmation", () => {
+    const { text, html } = renderEmail("booking_confirmed", data);
+    expect(text).toContain("2:32pm on Saturday 10 October 2026");
+    expect(text).toMatch(/non-refundable/i);
+    expect(html).toContain("2:32pm on Saturday 10 October 2026");
+  });
+
+  it("says a refund is processing, not complete, when a guest cancels in time", () => {
+    const { text } = renderEmail("guest_cancellation_confirmed", {
+      ...data,
+      refundAmount: "£300.00",
+    });
+    expect(text).toContain("£300.00");
+    expect(text).toMatch(/being processed/);
+    expect(text).not.toMatch(/has been refunded/i);
+    const late = renderEmail("guest_cancellation_confirmed", {
+      ...data,
+      refundAmount: null,
+    }).text;
+    expect(late).toMatch(/no refund is due/);
   });
 
   it("keeps guest contact details out of owner emails", () => {
@@ -73,7 +88,7 @@ describe("email templates", () => {
   });
 
   it("falls back gracefully when guest links aren't configured", () => {
-    const { text } = renderEmail("request_approved", {
+    const { text } = renderEmail("booking_confirmed", {
       ...data,
       bookingUrl: null,
     });

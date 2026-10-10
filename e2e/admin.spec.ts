@@ -50,14 +50,28 @@ test("owner blocks dates, sees them on the calendar, and guests can't book them"
     .getByRole("navigation", { name: "Admin" })
     .getByRole("link", { name: "Blocked dates" })
     .click();
-  await page.getByLabel("First night").fill(`${month}-06`);
-  await page.getByLabel(/End date/).fill(`${month}-09`);
-  await page.getByLabel("Reason (private)").fill("Maintenance (test)");
-  await page.getByRole("button", { name: "Block dates" }).click();
+  const add = page
+    .locator("form")
+    .filter({ has: page.getByRole("button", { name: "Block dates" }) });
+  await add.getByLabel("First night").fill(`${month}-06`);
+  await add.getByLabel(/End date/).fill(`${month}-09`);
+  await add.getByLabel("Reason (private)").fill(`Maintenance ${month}`);
+  await add.getByRole("button", { name: "Block dates" }).click();
   await expect(page.getByRole("status")).toHaveText("Dates blocked.");
 
+  // The owner can change a block's dates and label (audited).
+  const row = () =>
+    page.getByRole("listitem").filter({ hasText: `Maintenance ${month}` });
+  await row().getByText("Change dates or label").click();
+  await row().getByLabel("End date").fill(`${month}-10`);
+  await row().getByRole("button", { name: "Save changes" }).click();
+  await expect(page.getByRole("status")).toHaveText("Block updated.");
+
+  // The calendar labels blocks distinctly from bookings, with the reason.
   await page.goto(`/admin/calendar?month=${month}`);
-  await expect(page.getByRole("table")).toContainText("Owner block");
+  await expect(page.getByRole("table")).toContainText(
+    `Blocked: Maintenance ${month}`,
+  );
 
   const guest = await browser.newContext();
   const guestPage = await guest.newPage();
@@ -67,16 +81,24 @@ test("owner blocks dates, sees them on the calendar, and guests can't book them"
   await expect(
     guestPage.getByText(/isn’t available for all of those nights/),
   ).toBeVisible();
+
+  // Unblocking needs explicit confirmation, then the dates are bookable.
+  await page.goto("/admin/blocks");
+  await row().getByLabel("Confirm").check();
+  await row().getByRole("button", { name: "Unblock" }).click();
+  await expect(page.getByRole("status")).toContainText("Block removed");
+  await guestPage.reload();
+  await expect(guestPage.getByText("Available for your dates")).toBeVisible();
   await guest.close();
 
-  // Removal needs explicit confirmation.
-  await page.goto("/admin/blocks");
-  const row = page
-    .getByRole("listitem")
-    .filter({ hasText: "Maintenance (test)" });
-  await row.getByLabel("Confirm").check();
-  await row.getByRole("button", { name: "Remove block" }).click();
-  await expect(page.getByRole("status")).toContainText("Block removed");
+  // Every change is in the audit history on the overview.
+  await page.goto("/admin");
+  for (const action of [
+    "owner_block.created",
+    "owner_block.updated",
+    "owner_block.removed",
+  ])
+    await expect(page.getByText(action).first()).toBeVisible();
 });
 
 test("owner adds a higher-priority rate and new quotes use it", async ({

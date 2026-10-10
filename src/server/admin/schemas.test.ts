@@ -137,8 +137,6 @@ describe("admin form schemas", () => {
       checkInTime: "16:00",
       checkOutTime: "",
       bookingsEnabled: "on",
-      requestResponseHours: "24",
-      paymentWindowHours: "48",
     });
     expect(ok.data).toEqual({
       maxGuests: 6,
@@ -148,24 +146,7 @@ describe("admin form schemas", () => {
       checkInTime: "16:00",
       checkOutTime: null,
       bookingsEnabled: true,
-      requestResponseHours: 24,
-      paymentWindowHours: 48,
     });
-    const windows = (
-      requestResponseHours: string,
-      paymentWindowHours: string,
-    ) =>
-      propertySettingsSchema.safeParse({
-        maxGuests: "6",
-        defaultMinNights: "2",
-        bookingHorizonDays: "540",
-        requestResponseHours,
-        paymentWindowHours,
-      }).success;
-    expect(windows("1", "168")).toBe(true);
-    expect(windows("0", "24")).toBe(false);
-    expect(windows("24", "169")).toBe(false);
-    expect(windows("", "24")).toBe(false);
     expect(
       propertySettingsSchema.safeParse({
         maxGuests: "6",

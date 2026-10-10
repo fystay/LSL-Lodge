@@ -3,7 +3,13 @@ import { and, eq, inArray, lte, or, sql } from "drizzle-orm";
 import { formatStayDate, type IsoDate } from "@/lib/dates";
 import { formatMoney } from "@/lib/money";
 import type { Database } from "@/server/db/client";
-import { notificationJobs, properties, reservations } from "@/server/db/schema";
+import {
+  notificationJobs,
+  payments,
+  properties,
+  reservations,
+} from "@/server/db/schema";
+import { formatDeadline } from "@/server/booking/cancellation-policy";
 import { guestLinkSecret, signGuestLink } from "@/server/booking/guest-link";
 import type { ReservationStatus } from "@/server/booking/reservation-state";
 import type { Quote } from "@/server/pricing/quote";
@@ -12,7 +18,7 @@ import {
   ownerNotificationAddress,
   type EmailSender,
 } from "./email";
-import type { NotificationTemplate } from "./outbox";
+import { NOTIFICATION_TEMPLATES, type NotificationTemplate } from "./outbox";
 import {
   renderEmail,
   type RenderedEmail,
@@ -41,13 +47,10 @@ const BATCH = 20;
 
 /** Statuses in which each guest-facing message still makes sense. */
 const RELEVANT: Partial<Record<NotificationTemplate, ReservationStatus[]>> = {
-  request_received: ["REQUESTED"],
-  request_approved: ["APPROVED"],
-  payment_failed: ["APPROVED", "PENDING_PAYMENT"],
-  request_expired: ["EXPIRED"],
-  payment_window_expired: ["EXPIRED"],
+  payment_failed: ["PENDING_PAYMENT"],
   booking_confirmed: ["CONFIRMED", "PAYMENT_DUE"],
   booking_cancelled: ["CANCELLED", "REFUND_PENDING", "REFUNDED"],
+  guest_cancellation_confirmed: ["CANCELLED", "REFUND_PENDING", "REFUNDED"],
 };
 
 export interface DispatchResult {
@@ -185,6 +188,10 @@ export async function prepare(
   now: Date,
 ): Promise<{ to: string; email: RenderedEmail } | { cancel: string }> {
   const template = job.template as NotificationTemplate;
+  // A job for a message that no longer exists (e.g. queued under the old
+  // approval workflow) is cancelled, not retried.
+  if (!(template in NOTIFICATION_TEMPLATES))
+    return { cancel: "UNKNOWN_TEMPLATE" };
   const data = await templateData(db, job.reservationId, now);
   if (!data) return { cancel: "NO_RESERVATION" };
   const relevant = RELEVANT[template];
@@ -244,6 +251,20 @@ export async function templateData(
   if (!row) return null;
   const { r, timeZone } = row;
   const quote = r.quoteSnapshot as Quote;
+  const refundRows = await db
+    .select({
+      amountMinor: payments.amountMinor,
+      status: payments.status,
+      kind: payments.kind,
+    })
+    .from(payments)
+    .where(eq(payments.reservationId, r.id));
+  const refundedMinor = refundRows
+    .filter(
+      (p) =>
+        p.kind === "REFUND" && p.status !== "FAILED" && p.status !== "CANCELED",
+    )
+    .reduce((sum, p) => sum + p.amountMinor, 0);
   const secret = guestLinkSecret();
   const deadline =
     r.holdExpiresAt &&
@@ -274,6 +295,11 @@ export async function templateData(
           )}`
         : null,
       detail: r.reviewReason,
+      freeCancellationUntil: r.freeCancellationUntil
+        ? formatDeadline(r.freeCancellationUntil, timeZone)
+        : null,
+      refundAmount:
+        refundedMinor > 0 ? formatMoney(refundedMinor, r.currency) : null,
     },
     guestEmail: r.guestEmail,
     status: r.status,

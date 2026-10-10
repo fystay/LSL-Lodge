@@ -57,6 +57,13 @@
       "when": 1791580854677,
       "tag": "0007_refunds_and_cancellation",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1791581810862,
+      "tag": "0008_instant_booking",
+      "breakpoints": true
     }
   ]
 }

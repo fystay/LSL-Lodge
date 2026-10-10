@@ -77,7 +77,7 @@ export const ALLOWED_TRANSITIONS: Record<
   REFUNDED: [],
   // Owner resolves conflicts and exceptional payment/calendar states. Moving
   // to CONFIRMED additionally requires a recorded, verified payment
-  // (enforced in src/server/booking/requests.ts).
+  // (enforced in confirmReviewedBooking, src/server/booking/resolution.ts).
   REQUIRES_REVIEW: [
     "APPROVED",
     "DECLINED",

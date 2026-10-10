@@ -99,8 +99,8 @@ export async function upcomingStays(
     .limit(PAGE_SIZE);
 }
 
-/** Requests awaiting the owner's decision, soonest deadline first. */
-export async function pendingRequests(db: Executor, propertyId: string) {
+/** Bookings in progress: dates held while the guest pays, soonest expiry first. */
+export async function awaitingPayment(db: Executor, propertyId: string) {
   return db
     .select({
       id: reservations.id,
@@ -117,7 +117,7 @@ export async function pendingRequests(db: Executor, propertyId: string) {
     .where(
       and(
         eq(reservations.propertyId, propertyId),
-        eq(reservations.status, "REQUESTED"),
+        eq(reservations.status, "PENDING_PAYMENT"),
       ),
     )
     .orderBy(asc(reservations.holdExpiresAt))
@@ -290,6 +290,42 @@ export async function recentAudit(db: Executor, limit = 20) {
     .from(auditLogs)
     .orderBy(desc(auditLogs.createdAt))
     .limit(Math.min(limit, 100));
+}
+
+/**
+ * Admin-only labels for calendar blocks: the booking reference for
+ * reservations and the owner's reason for blocks. Kept out of loadBlocks so
+ * public availability never carries them.
+ */
+export async function blockLabels(
+  db: Executor,
+  blocks: readonly { id: string; source: string }[],
+): Promise<Map<string, string>> {
+  const resIds = blocks
+    .filter((b) => b.source === "DIRECT_BOOKING" || b.source === "HOLD")
+    .map((b) => b.id);
+  const blockIds = blocks
+    .filter((b) => b.source === "OWNER_BLOCK")
+    .map((b) => b.id);
+  const [refs, reasons] = await Promise.all([
+    resIds.length
+      ? db
+          .select({ id: reservations.id, label: reservations.publicRef })
+          .from(reservations)
+          .where(inArray(reservations.id, resIds))
+      : [],
+    blockIds.length
+      ? db
+          .select({ id: ownerBlocks.id, label: ownerBlocks.reason })
+          .from(ownerBlocks)
+          .where(inArray(ownerBlocks.id, blockIds))
+      : [],
+  ]);
+  return new Map(
+    [...refs, ...reasons]
+      .filter((r): r is { id: string; label: string } => Boolean(r.label))
+      .map((r) => [r.id, r.label]),
+  );
 }
 
 export async function activeOwnerBlocks(
@@ -638,8 +674,6 @@ export async function updatePropertySettings(
         checkInTime: input.checkInTime,
         checkOutTime: input.checkOutTime,
         bookingsEnabled: input.bookingsEnabled,
-        requestResponseHours: input.requestResponseHours,
-        paymentWindowHours: input.paymentWindowHours,
       })
       .where(eq(properties.id, propertyId));
     await audit(

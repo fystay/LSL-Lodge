@@ -20,8 +20,9 @@ Stripe itself.
    - on a preview deployment: add an endpoint for
      `https://<preview>/api/webhooks/stripe` with the events
      `checkout.session.completed`, `checkout.session.async_payment_succeeded`,
-     `checkout.session.async_payment_failed`, `checkout.session.expired`, and
-     put its signing secret in `STRIPE_WEBHOOK_SECRET`.
+     `checkout.session.async_payment_failed`, `checkout.session.expired`,
+     `refund.created`, `refund.updated`, `refund.failed`, and put its signing
+     secret in `STRIPE_WEBHOOK_SECRET`.
 4. A development database (local, or the dedicated Supabase dev project) with
    placeholder rates, `BOOKING_PREVIEW=true`, and an admin account.
 
@@ -34,26 +35,27 @@ STRIPE_SANDBOX_E2E=true E2E_BOOKING=true BOOKING_PREVIEW=true \
   pnpm build && pnpm test:e2e e2e/stripe-sandbox.spec.ts --project desktop
 ```
 
-`e2e/stripe-sandbox.spec.ts` covers scenarios 1–5 below. It has not been run
+`e2e/stripe-sandbox.spec.ts` covers scenarios 1–4 below. It has not been run
 yet; Stripe's hosted-page selectors may need adjusting the first time.
 
 ## Scenarios and expected results
 
-| #   | Scenario                             | How                                                                                             | Expected                                                                                                                                        |
-| --- | ------------------------------------ | ----------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
-| 1   | Guest submits a request              | Book dates on `/availability`                                                                   | Status "Request sent: awaiting the owner's approval"; nothing charged                                                                           |
-| 2   | Owner approves                       | `/admin` → request → Approve                                                                    | "Approved: awaiting your payment"; Pay button shows the full amount                                                                             |
-| 3   | Guest pays in test mode              | Pay → card `4242 4242 4242 4242`, any future date, any CVC                                      | Redirect back; "Confirming…", then "Confirmed"                                                                                                  |
-| 4   | Verified webhook records the payment | `stripe listen` output shows 200; `webhook_events` row PROCESSED                                | One `payments` row SUCCEEDED with the Stripe PaymentIntent ID                                                                                   |
-| 5   | Confirmed exactly once               | Reload; let the webhook arrive after the return page confirmed                                  | One `reservation.confirmed` audit entry; booking-confirmed email queued once                                                                    |
-| 6   | Duplicate/retried webhook            | `stripe events resend <evt_id>`                                                                 | 200; `webhook_events` unchanged (duplicate); no new audit entries                                                                               |
-| 7   | Invalid signature                    | `curl -X POST -H 'stripe-signature: t=1,v1=bad' -d '{}' …/api/webhooks/stripe`                  | 400; nothing recorded                                                                                                                           |
-| 8   | Amount mismatch                      | Not reproducible with real Checkout (the amount is server-set); covered by integration tests    | Booking to review, "AMOUNT_MISMATCH", owner alerted                                                                                             |
-| 9   | Abandoned checkout                   | Pay → "← Back" on Stripe's page                                                                 | "Payment was cancelled and nothing was charged"; Pay again works (same open session reused)                                                     |
-| 10  | Session expiry                       | With a session open, `stripe checkout sessions expire <cs_id>`                                  | `checkout.session.expired` → payment CANCELED; booking still APPROVED; Pay again creates a new session                                          |
-| 11  | Payment window expires               | Set the payment window to 1 hour, approve, wait (or run the `expire-holds` job after it passes) | Booking EXPIRED; open session expired at Stripe; guest emailed; dates free                                                                      |
-| 12  | Late payment                         | Open Checkout, let the booking expire, then pay                                                 | Booking to REQUIRES_REVIEW ("payment arrived after the booking lapsed") or, if the dates were re-booked, flagged refund-required; owner alerted |
-| 13  | Declined card                        | Card `4000 0000 0000 0002`                                                                      | Stripe shows the decline; nothing recorded as paid; booking stays APPROVED                                                                      |
-| 14  | 3-D Secure                           | Card `4000 0025 0000 3155`, complete the challenge                                              | Confirms as in 3                                                                                                                                |
+| #   | Scenario                             | How                                                                                                              | Expected                                                                                                                              |
+| --- | ------------------------------------ | ---------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
+| 1   | Guest books instantly                | Choose dates on `/availability` → details → Continue to payment                                                  | Redirected straight to Stripe Checkout (no approval); "Free cancellation until … (UK time)" shown beside the pay button; dates held   |
+| 2   | Guest pays in test mode              | Card `4242 4242 4242 4242`, any future date, any CVC                                                             | Redirect back; "Confirming…", then "Confirmed"; booking page shows the free-cancellation deadline                                     |
+| 3   | Verified webhook records the payment | `stripe listen` output shows 200; `webhook_events` row PROCESSED                                                 | One `payments` row SUCCEEDED with the Stripe PaymentIntent ID                                                                         |
+| 4   | Confirmed exactly once               | Reload; let the webhook arrive after the return page confirmed                                                   | One `reservation.confirmed` audit entry; booking-confirmed email (with the deadline) queued once                                      |
+| 5   | Duplicate/retried webhook            | `stripe events resend <evt_id>`                                                                                  | 200; `webhook_events` unchanged (duplicate); no new audit entries                                                                     |
+| 6   | Invalid signature                    | `curl -X POST -H 'stripe-signature: t=1,v1=bad' -d '{}' …/api/webhooks/stripe`                                   | 400; nothing recorded                                                                                                                 |
+| 7   | Amount mismatch                      | Not reproducible with real Checkout (the amount is server-set); covered by integration tests                     | Booking to review, "AMOUNT_MISMATCH", owner alerted                                                                                   |
+| 8   | Abandoned checkout                   | On Stripe's page, "← Back"                                                                                       | "Payment was cancelled and nothing was charged"; "Pay now" reuses the open session while the hold lasts                               |
+| 9   | Hold expires                         | Leave Checkout open past the hold (35 min) or `stripe checkout sessions expire <cs_id>`, then run `expire-holds` | Booking EXPIRED; session expired at Stripe; dates free                                                                                |
+| 10  | Late payment                         | Open Checkout, let the hold expire, then pay                                                                     | REQUIRES_REVIEW if the dates are still free; if re-booked or cancelled, a full refund is queued and sent automatically; owner alerted |
+| 11  | Declined card                        | Card `4000 0000 0000 0002`                                                                                       | Stripe shows the decline; nothing recorded as paid; booking stays held until expiry                                                   |
+| 12  | 3-D Secure                           | Card `4000 0025 0000 3155`, complete the challenge                                                               | Confirms as in 2                                                                                                                      |
+| 13  | Cancel within 24 h                   | Booking page → Cancel this booking → confirm                                                                     | "Refund started"; `refund.updated` → succeeded; booking REFUNDED; refund-completed email queued; Stripe dashboard shows one refund    |
+| 14  | Cancel after 24 h                    | Cancel a test booking made more than 24 h earlier (the stored deadline cannot be edited)                         | Without the acknowledgement: refused, booking unchanged; with it: CANCELLED, no refund created                                        |
+| 15  | Refund send fails                    | Temporarily revoke the key or block the network, cancel within 24 h, restore, run `process-refunds`              | Refund PENDING, not shown as refunded; succeeds on retry with the same idempotency key (one refund in Stripe)                         |
 
 Record the actual results here (date, environment, pass/fail, notes) when run.

@@ -2,9 +2,10 @@
 
 Status (9 October 2026): the job system is built and verified locally
 against a production build. **No scheduler is configured on any
-deployment.** Until one is, nothing runs on its own: requests don't lapse
-by themselves (deadlines are still enforced whenever someone books or the
-owner acts), emails aren't sent, and Airbnb isn't polled. The owner can run
+deployment.** Until one is, nothing runs on its own: unpaid holds don't lapse
+by themselves (expiry is still enforced whenever someone books or pays),
+emails aren't sent, refunds that couldn't reach Stripe at once aren't
+retried, and Airbnb isn't polled. The owner can run
 each task by hand from `/admin/system`.
 
 ## What runs
@@ -14,8 +15,9 @@ called every **5 minutes**. Each job runs when due:
 
 | Job                  | Every  | Timeout | Overdue after | Does                                                                                                    |
 | -------------------- | ------ | ------- | ------------- | ------------------------------------------------------------------------------------------------------- |
-| `expire-holds`       | 5 min  | 60 s    | 20 min        | Expires lapsed requests, approvals and holds; closes their Stripe Checkout Sessions; queues the emails  |
+| `expire-holds`       | 5 min  | 60 s    | 20 min        | Expires lapsed unpaid holds; closes their Stripe Checkout Sessions                                      |
 | `send-notifications` | 5 min  | 120 s   | 20 min        | Sends up to 100 due emails (5 batches of 20); retries failures with backoff                             |
+| `process-refunds`    | 5 min  | 120 s   | 20 min        | Sends queued refunds to Stripe and retries failed sends (same idempotency key; 6 attempts, then alert)  |
 | `sync-calendars`     | 5 min  | 120 s   | 30 min        | Polls Airbnb feeds that are due (each source sets its own next time and backs off after failures)       |
 | `maintenance`        | 60 min | 60 s    | 3 h           | Recovers abandoned runs and leases, marks stale feeds, prunes old data, emails the owner about problems |
 
@@ -35,7 +37,9 @@ separate scheduling. Code: `src/server/jobs/`.
 - **Bounded.** Fixed timeouts per job and per outbound call (Stripe 15 s,
   feeds 10 s, email 10 s), batch limits, `maxDuration` 300 s on the routes.
 - **Retries.** Emails: exponential backoff with jitter, 6 attempts, then
-  FAILED. Calendar feeds: backoff from 5 minutes up to 6 hours. Stripe
+  FAILED. Refunds: backoff 2, 4, 8 … up to 60 minutes, 6 attempts, then
+  FAILED with an owner alert (health shows `refunds_stuck` /
+  `refunds_failed`). Calendar feeds: backoff from 5 minutes up to 6 hours. Stripe
   retries its own webhooks for up to 3 days. A failed job run is simply
   retried on the next tick.
 - **Crash recovery.** A runner that dies leaves its lease to expire

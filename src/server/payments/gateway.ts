@@ -32,6 +32,8 @@ export interface CreateCheckoutParams {
   successUrl: string;
   cancelUrl: string;
   expiresAt: Date;
+  /** Shown beside Checkout's pay button (the cancellation deadline). */
+  submitMessage?: string;
   /** Stable per payment attempt: a retried request returns the same session. */
   idempotencyKey: string;
 }
@@ -157,6 +159,9 @@ class StripeCheckoutGateway implements PaymentGateway {
         success_url: p.successUrl,
         cancel_url: p.cancelUrl,
         expires_at: Math.floor(p.expiresAt.getTime() / 1000),
+        ...(p.submitMessage
+          ? { custom_text: { submit: { message: p.submitMessage } } }
+          : {}),
       },
       { idempotencyKey: p.idempotencyKey },
     );

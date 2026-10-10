@@ -9,6 +9,7 @@ import {
   type IsoDate,
 } from "@/lib/dates";
 import { adminContext } from "@/server/admin/context";
+import { blockLabels } from "@/server/admin/data";
 import {
   loadBlocks,
   type Block,
@@ -18,9 +19,9 @@ import {
 export const metadata = { title: "Calendar" };
 
 const SOURCE_LABEL: Record<BlockSource, string> = {
-  DIRECT_BOOKING: "Direct booking",
-  HOLD: "Hold",
-  OWNER_BLOCK: "Owner block",
+  DIRECT_BOOKING: "Booking",
+  HOLD: "Paying now",
+  OWNER_BLOCK: "Blocked",
   AIRBNB_ICAL: "Airbnb",
   GOOGLE: "Google",
   OTHER_ICAL: "Other calendar",
@@ -77,6 +78,7 @@ async function AdminCalendar({
     0,
     ctx.now,
   );
+  const labels = await blockLabels(ctx.db, blocks);
   const title = new Intl.DateTimeFormat("en-GB", {
     month: "long",
     year: "numeric",
@@ -140,7 +142,9 @@ async function AdminCalendar({
                     key={date ?? `e${i}`}
                     className="h-24 border border-sage-300/70 p-1 align-top"
                   >
-                    {date && <Night date={date} blocks={blocks} />}
+                    {date && (
+                      <Night date={date} blocks={blocks} labels={labels} />
+                    )}
                   </td>
                 ))}
               </tr>
@@ -149,14 +153,29 @@ async function AdminCalendar({
         </table>
       </div>
       <p className="text-sm text-ink-muted">
-        Each label shows where a night&rsquo;s block came from. Overlapping
-        labels on a night mean a conflict to resolve.
+        Each label shows what occupies a night: a website booking (solid green,
+        with its reference), a guest paying right now (dashed), dates you
+        blocked (wood, with your label), or an imported calendar. Overlapping
+        labels on a night mean a conflict to resolve. Block or unblock dates on
+        the{" "}
+        <Link href="/admin/blocks" className="underline underline-offset-4">
+          Blocked dates
+        </Link>{" "}
+        page.
       </p>
     </div>
   );
 }
 
-function Night({ date, blocks }: { date: IsoDate; blocks: Block[] }) {
+function Night({
+  date,
+  blocks,
+  labels,
+}: {
+  date: IsoDate;
+  blocks: Block[];
+  labels: Map<string, string>;
+}) {
   const here = blocks.filter((b) => b.start <= date && date < b.end);
   return (
     <div>
@@ -168,7 +187,24 @@ function Night({ date, blocks }: { date: IsoDate; blocks: Block[] }) {
             key={`${b.source}-${b.id}`}
             className={`truncate rounded-sm px-1 text-xs ${SOURCE_STYLE[b.source]}`}
           >
-            {SOURCE_LABEL[b.source]}
+            {b.source === "DIRECT_BOOKING" || b.source === "HOLD" ? (
+              <Link
+                href={`/admin/bookings/${b.id}`}
+                className="underline underline-offset-2"
+              >
+                {SOURCE_LABEL[b.source]} {labels.get(b.id)}
+              </Link>
+            ) : b.source === "OWNER_BLOCK" ? (
+              <Link
+                href="/admin/blocks"
+                className="underline underline-offset-2"
+              >
+                {SOURCE_LABEL[b.source]}
+                {labels.get(b.id) ? `: ${labels.get(b.id)}` : ""}
+              </Link>
+            ) : (
+              SOURCE_LABEL[b.source]
+            )}
           </li>
         ))}
       </ul>

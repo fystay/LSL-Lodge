@@ -10,8 +10,7 @@ const purposeLabel = {
 
 /**
  * Itemised price and payment schedule. Every mandatory charge is shown.
- * `dueLabels` overrides the due text per schedule sequence, e.g. "due once
- * the owner approves" for a request, where nothing is due on the quote date.
+ * `dueLabels` overrides the due text per schedule sequence.
  */
 export function QuoteSummary({
   quote,

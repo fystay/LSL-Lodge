@@ -10,17 +10,20 @@ import {
   reservations,
 } from "@/server/db/schema";
 import { enqueueForReservation } from "@/server/notifications/outbox";
+import { queueFullRefund } from "@/server/payments/refunds";
 import {
   conflictingBlocks,
   loadBlocks,
   type BlockSource,
 } from "./availability";
+import { refundEligible } from "./cancellation-policy";
 
 /**
- * Owner and guest actions on existing bookings that don't depend on a
- * cancellation policy. None of them calculates or promises a refund: when
- * money has been paid, the booking is flagged "refund decision needed" and
- * the owner decides (refunds: src/server/payments/refunds.ts).
+ * Owner and guest actions on existing bookings. Guest cancellations follow
+ * the host's 24-hour policy (guestCancel). When the OWNER cancels a paid
+ * booking, the policy doesn't say what's owed, so the booking is flagged
+ * "refund decision needed" and the owner chooses the refund
+ * (src/server/payments/refunds.ts).
  *
  * Lock order matches every other booking write: property, then reservation.
  */
@@ -189,6 +192,7 @@ export async function cancelByOwner(
       .set({
         status: "CANCELLED",
         cancelledAt: now,
+        cancelledBy: `OWNER:${input.actor}`,
         holdExpiresAt: null,
         reviewReason: paid ? "CANCELLED_REFUND_DECISION" : null,
         ownerNote: input.ownerNote?.trim().slice(0, 1000) || r.ownerNote,
@@ -260,41 +264,63 @@ export async function markFlagResolved(
   });
 }
 
+export type GuestCancelResult =
+  | { ok: true; outcome: "HOLD_RELEASED"; openSessions: string[] }
+  | {
+      ok: true;
+      outcome: "CANCELLED_WITH_REFUND";
+      refundIds: string[];
+      refundMinor: number;
+    }
+  | { ok: true; outcome: "CANCELLED_NO_REFUND" }
+  | {
+      ok: false;
+      reason:
+        "NOT_FOUND" | "NOT_ALLOWED" | "PAYMENT_PROCESSING" | "ACK_REQUIRED";
+    };
+
 /**
- * The guest's own action from their booking page. Unpaid requests and
- * approvals are withdrawn at once (nothing is owed either way). A paid
- * booking is only marked "cancellation requested" and the owner alerted:
- * what happens next depends on the owner's policy.
+ * The guest cancels from their booking page, under the host's policy
+ * (src/server/booking/cancellation-policy.ts):
+ *
+ * - An unpaid hold is simply released.
+ * - A paid booking cancelled STRICTLY BEFORE `freeCancellationUntil`
+ *   (`receivedAt` is when the server received the request) is cancelled and
+ *   everything paid is queued for refund in the same transaction. The
+ *   caller then sends the refunds (src/server/payments/refunds.ts).
+ * - A paid booking cancelled at or after the deadline is cancelled without
+ *   a refund, but only if the guest explicitly acknowledged that
+ *   (`acknowledgeNoRefund`); otherwise nothing changes.
+ *
+ * The dates are released either way. Bookings under review, or with a
+ * payment still settling, can't be cancelled here (the owner handles them).
  */
 export async function guestCancel(
   db: Database,
-  input: { propertyId: string; reservationId: string; now?: Date },
-): Promise<
-  | { ok: true; outcome: "WITHDRAWN"; openSessions: string[] }
-  | { ok: true; outcome: "REQUESTED" }
-  | { ok: false; reason: "NOT_FOUND" | "NOT_ALLOWED" }
-> {
-  const now = input.now ?? new Date();
+  input: {
+    propertyId: string;
+    reservationId: string;
+    acknowledgeNoRefund?: boolean;
+    receivedAt?: Date;
+  },
+): Promise<GuestCancelResult> {
+  const now = input.receivedAt ?? new Date();
   return db.transaction(async (tx) => {
     const r = await lock(tx, input.propertyId, input.reservationId);
     if (!r) return { ok: false, reason: "NOT_FOUND" } as const;
-    const paid = (await netPaid(tx, r.id)) > 0;
-    if ((r.status === "REQUESTED" || r.status === "APPROVED") && !paid) {
-      const processing = await tx
-        .select({ id: payments.id })
-        .from(payments)
-        .where(
-          and(
-            eq(payments.reservationId, r.id),
-            eq(payments.status, "PROCESSING"),
-          ),
-        );
-      if (processing.length > 0)
-        return { ok: false, reason: "NOT_ALLOWED" } as const;
-      await tx
-        .update(reservations)
-        .set({ status: "CANCELLED", cancelledAt: now, holdExpiresAt: null })
-        .where(eq(reservations.id, r.id));
+    const processing = await tx
+      .select({ id: payments.id })
+      .from(payments)
+      .where(
+        and(
+          eq(payments.reservationId, r.id),
+          eq(payments.status, "PROCESSING"),
+        ),
+      );
+    if (processing.length > 0)
+      return { ok: false, reason: "PAYMENT_PROCESSING" } as const;
+
+    const release = async () => {
       await tx
         .update(paymentScheduleItems)
         .set({ status: "CANCELLED" })
@@ -304,6 +330,23 @@ export async function guestCancel(
             ne(paymentScheduleItems.status, "PAID"),
           ),
         );
+    };
+
+    // Unpaid: release the hold (also covers bookings from the old request flow).
+    if (
+      ["PENDING_PAYMENT", "REQUESTED", "APPROVED"].includes(r.status) &&
+      (await netPaid(tx, r.id)) === 0
+    ) {
+      await tx
+        .update(reservations)
+        .set({
+          status: "CANCELLED",
+          cancelledAt: now,
+          cancelledBy: "GUEST",
+          holdExpiresAt: null,
+        })
+        .where(eq(reservations.id, r.id));
+      await release();
       const open = await tx
         .update(payments)
         .set({ status: "CANCELED" })
@@ -311,29 +354,55 @@ export async function guestCancel(
           and(eq(payments.reservationId, r.id), eq(payments.status, "PENDING")),
         )
         .returning({ sessionId: payments.stripeCheckoutSessionId });
-      await audit(tx, "reservation.withdrawn_by_guest", r.id, null, {
+      await audit(tx, "reservation.hold_released_by_guest", r.id, null, {
         previousStatus: r.status,
       });
-      await enqueueForReservation(tx, r.id, ["owner_booking_withdrawn"]);
       return {
         ok: true,
-        outcome: "WITHDRAWN",
+        outcome: "HOLD_RELEASED",
         openSessions: open
           .map((o) => o.sessionId)
           .filter((s): s is string => Boolean(s)),
       } as const;
     }
-    if (["CONFIRMED", "PAYMENT_DUE"].includes(r.status)) {
-      if (!r.cancellationRequestedAt) {
-        await tx
-          .update(reservations)
-          .set({ cancellationRequestedAt: now })
-          .where(eq(reservations.id, r.id));
-        await audit(tx, "reservation.cancellation_requested", r.id, null);
-        await enqueueForReservation(tx, r.id, ["owner_cancellation_requested"]);
-      }
-      return { ok: true, outcome: "REQUESTED" } as const;
-    }
-    return { ok: false, reason: "NOT_ALLOWED" } as const;
+
+    if (r.status !== "CONFIRMED" && r.status !== "PAYMENT_DUE")
+      return { ok: false, reason: "NOT_ALLOWED" } as const;
+
+    const eligible = refundEligible(r.freeCancellationUntil, now);
+    if (!eligible && !input.acknowledgeNoRefund)
+      return { ok: false, reason: "ACK_REQUIRED" } as const;
+
+    await tx
+      .update(reservations)
+      .set({
+        status: "CANCELLED",
+        cancelledAt: now,
+        cancelledBy: "GUEST",
+        holdExpiresAt: null,
+      })
+      .where(eq(reservations.id, r.id));
+    await release();
+    const refund = eligible
+      ? await queueFullRefund(tx, r.id, "GUEST_POLICY", now)
+      : { refundIds: [], totalMinor: 0 };
+    await audit(tx, "reservation.cancelled_by_guest", r.id, null, {
+      receivedAt: now.toISOString(),
+      freeCancellationUntil: r.freeCancellationUntil?.toISOString() ?? null,
+      refundEligible: eligible,
+      refundMinor: refund.totalMinor,
+    });
+    await enqueueForReservation(tx, r.id, [
+      "guest_cancellation_confirmed",
+      "owner_guest_cancelled",
+    ]);
+    return eligible
+      ? ({
+          ok: true,
+          outcome: "CANCELLED_WITH_REFUND",
+          refundIds: refund.refundIds,
+          refundMinor: refund.totalMinor,
+        } as const)
+      : ({ ok: true, outcome: "CANCELLED_NO_REFUND" } as const);
   });
 }

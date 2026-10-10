@@ -17,19 +17,18 @@ import { adminContext } from "@/server/admin/context";
 import { reservationConflicts, reservationDetail } from "@/server/admin/data";
 import { paymentsConfigured } from "@/server/payments/gateway";
 import { refundableCharges } from "@/server/payments/refunds";
+import { refundEligible } from "@/server/booking/cancellation-policy";
 import { penceToPounds } from "@/server/admin/schemas";
 import type { Quote } from "@/server/pricing/quote";
 import {
-  approveRequestAction,
   cancelBookingAction,
   confirmReviewedAction,
-  declineRequestAction,
   refundAction,
   resolveFlagAction,
 } from "../../../actions";
 
 const CANCELLABLE = [
-  "APPROVED",
+  "APPROVED", // legacy request-mode status
   "PENDING_PAYMENT",
   "CONFIRMED",
   "PAYMENT_DUE",
@@ -45,14 +44,14 @@ const SOURCE_LABEL: Record<string, string> = {
   OTHER_ICAL: "Imported calendar",
   CHANNEL_MANAGER: "Channel manager",
   DIRECT_BOOKING: "Another website booking",
-  HOLD: "Another request or hold",
+  HOLD: "Another booking awaiting payment",
 };
 
 const REVIEW_REASON: Record<string, string> = {
   PAYMENT_AFTER_EXPIRY:
     "Payment arrived after the booking lapsed. Decide whether to honour the booking or refund.",
   PAYMENT_AFTER_EXPIRY_REFUND_REQUIRED:
-    "Payment arrived after the booking lapsed and the dates had been re-booked. The payment must be refunded.",
+    "Payment arrived after the booking lapsed and the dates had been re-booked. It is being refunded in full automatically; check the refund below.",
   AMOUNT_MISMATCH:
     "The amount paid doesn’t match the agreed price. Check the payment in Stripe.",
   CALENDAR_CONFLICT:
@@ -60,11 +59,28 @@ const REVIEW_REASON: Record<string, string> = {
   DUPLICATE_PAYMENT:
     "A second payment was received for an already confirmed booking. Refund the duplicate.",
   DUPLICATE_PAYMENT_REFUND_REQUIRED:
-    "A second payment was received for this confirmed booking. The booking stands; refund the extra payment below.",
+    "A second payment was received for this confirmed booking. The booking stands; the extra payment is being refunded automatically.",
   CANCELLED_REFUND_DECISION:
     "This booking was cancelled after payment. Decide on any refund under your policy, then refund below or mark it handled.",
   NOT_APPROVED: "Payment was received for a request that was never approved.",
+  REFUND_FAILED:
+    "A refund could not be sent to Stripe after several attempts. Check the payment in Stripe and refund manually if needed.",
 };
+
+/** Never call a refund complete until Stripe has confirmed it. */
+function paymentStatusLabel(kind: string, status: string) {
+  if (kind !== "REFUND") return status.toLowerCase();
+  return (
+    {
+      PENDING: "queued, not yet sent to Stripe",
+      PROCESSING: "sent, awaiting Stripe confirmation",
+      REQUIRES_ACTION: "awaiting action in Stripe",
+      SUCCEEDED: "refunded (confirmed by Stripe)",
+      FAILED: "failed",
+      CANCELED: "cancelled",
+    }[status] ?? status.toLowerCase()
+  );
+}
 
 const when = (d: Date | null) =>
   d
@@ -101,9 +117,8 @@ async function Detail({
   if (!detail) notFound();
   const { reservation: r, schedule, payments, history, notifications } = detail;
   const quote = r.quoteSnapshot as Quote;
-  const pending = r.status === "REQUESTED";
   const conflicts =
-    pending || r.status === "APPROVED" || r.status === "REQUIRES_REVIEW"
+    r.status === "PENDING_PAYMENT" || r.status === "REQUIRES_REVIEW"
       ? await reservationConflicts(
           ctx.db,
           r,
@@ -292,97 +307,22 @@ async function Detail({
         </div>
       )}
 
-      {pending && (
-        <div className="mt-6">
-          <AdminSection id="decision" title="Your decision">
-            <p>
-              Respond by <strong>{when(r.holdExpiresAt)}</strong> (UK time).
-              After that the request lapses and the dates are released. The
-              guest has not been charged.
-            </p>
-            {conflicts.length > 0 ? (
-              <div
-                role="alert"
-                className="mt-3 rounded-soft border border-danger/40 bg-ivory p-3 text-danger"
-              >
-                <p className="font-semibold">
-                  These dates now overlap other calendar entries:
-                </p>
-                <ul className="mt-1 list-disc pl-5">
-                  {conflicts.map((c) => (
-                    <li key={c}>{SOURCE_LABEL[c] ?? c}</li>
-                  ))}
-                </ul>
-                <p className="mt-1">
-                  Approval is blocked until the clash is resolved.
-                </p>
-              </div>
-            ) : (
-              <p className="mt-2 text-sm text-ink-muted">
-                No clashes with your blocked dates or imported calendars as of
-                their last sync. Imported calendars (such as Airbnb) can lag
-                behind, so check them if in doubt.
-              </p>
-            )}
-            {!paymentsConfigured() && (
-              <p className="mt-3 rounded-soft border border-notice-ink/30 bg-notice p-3 text-notice-ink">
-                Card payments aren&rsquo;t configured on this site, so an
-                approved guest won&rsquo;t be able to pay yet.
-              </p>
-            )}
-            <div className="mt-5 grid gap-6 md:grid-cols-2">
-              <form action={approveRequestAction} className="space-y-3">
-                <input type="hidden" name="id" value={r.id} />
-                <label htmlFor="approve-note" className="block font-semibold">
-                  Private note (optional)
-                </label>
-                <textarea
-                  id="approve-note"
-                  name="ownerNote"
-                  maxLength={1000}
-                  rows={2}
-                  className={inputClass}
-                />
-                <p className="text-sm text-ink-muted">
-                  The guest will be asked to pay{" "}
-                  {formatMoney(r.totalMinor, r.currency)} within{" "}
-                  {ctx.property.paymentWindowHours} hours.
-                </p>
-                <button
-                  type="submit"
-                  className={primaryButton}
-                  disabled={conflicts.length > 0}
-                >
-                  Approve request
-                </button>
-              </form>
-              <form action={declineRequestAction} className="space-y-3">
-                <input type="hidden" name="id" value={r.id} />
-                <label htmlFor="decline-note" className="block font-semibold">
-                  Private note (optional, not sent to the guest)
-                </label>
-                <textarea
-                  id="decline-note"
-                  name="ownerNote"
-                  maxLength={1000}
-                  rows={2}
-                  className={inputClass}
-                />
-                <label className="flex min-h-11 items-center gap-3">
-                  <input
-                    type="checkbox"
-                    name="confirm"
-                    value="yes"
-                    className="size-5"
-                  />
-                  <span>Yes, decline this request</span>
-                </label>
-                <button type="submit" className={smallButton}>
-                  Decline request
-                </button>
-              </form>
-            </div>
-          </AdminSection>
+      {conflicts.length > 0 && (
+        <div
+          role="alert"
+          className="mt-6 rounded-soft border border-danger/40 bg-ivory p-4 text-danger"
+        >
+          <p className="font-semibold">
+            These dates now overlap other calendar entries:
+          </p>
+          <ul className="mt-1 list-disc pl-5">
+            {conflicts.map((c) => (
+              <li key={c}>{SOURCE_LABEL[c] ?? c}</li>
+            ))}
+          </ul>
+          <p className="mt-1">
+            The booking can&rsquo;t be confirmed until the clash is resolved.
+          </p>
         </div>
       )}
 
@@ -406,8 +346,19 @@ async function Detail({
             <dd>{r.guestPhone ?? "—"}</dd>
             <dt className="font-semibold">Source</dt>
             <dd>{r.source === "DIRECT" ? "Website" : "Entered by owner"}</dd>
-            <dt className="font-semibold">Requested</dt>
-            <dd>{when(r.createdAt)}</dd>
+            <dt className="font-semibold">Booked</dt>
+            <dd>{when(r.requestedAt)}</dd>
+            {r.freeCancellationUntil && (
+              <>
+                <dt className="font-semibold">Free cancellation</dt>
+                <dd>
+                  until {when(r.freeCancellationUntil)}
+                  {refundEligible(r.freeCancellationUntil, ctx.now)
+                    ? " (still open)"
+                    : " (passed: non-refundable)"}
+                </dd>
+              </>
+            )}
             {r.approvedAt && (
               <>
                 <dt className="font-semibold">Approved</dt>
@@ -428,6 +379,16 @@ async function Detail({
               <>
                 <dt className="font-semibold">Pay by</dt>
                 <dd>{when(r.holdExpiresAt)}</dd>
+              </>
+            )}
+            {r.cancelledBy && (
+              <>
+                <dt className="font-semibold">Cancelled by</dt>
+                <dd>
+                  {r.cancelledBy === "GUEST"
+                    ? "Guest"
+                    : r.cancelledBy.replace(/^OWNER:/, "Owner: ")}
+                </dd>
               </>
             )}
             {r.confirmedAt && (
@@ -473,7 +434,7 @@ async function Detail({
                 <li key={p.id}>
                   {when(p.createdAt)} · {p.kind.toLowerCase()}{" "}
                   {formatMoney(p.amountMinor, p.currency)} ·{" "}
-                  <strong>{p.status.toLowerCase()}</strong>
+                  <strong>{paymentStatusLabel(p.kind, p.status)}</strong>
                   {p.failureCode ? ` (${p.failureCode})` : ""}
                   {p.stripePaymentIntentId
                     ? ` · Stripe ${p.stripePaymentIntentId}`

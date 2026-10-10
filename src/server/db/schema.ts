@@ -75,10 +75,9 @@ export const reservationStatus = pgEnum("reservation_status", [
 ]);
 
 /**
- * REQUEST: the guest asks, the owner approves, then the guest pays (the
- * initial, owner-chosen mode). INSTANT: the guest pays straight away; built
- * but refused at runtime until the owner approves it (see
- * src/server/booking/mode.ts).
+ * Unused since October 2026: every booking is instant (pay in full, confirmed
+ * on verified payment). Kept so existing rows and the column need no
+ * destructive migration; see docs/PLAN.md §8.
  */
 export const bookingMode = pgEnum("booking_mode", ["REQUEST", "INSTANT"]);
 
@@ -219,12 +218,15 @@ export const properties = pgTable(
     /** Reference to published, owner-approved content (e.g. a content slug). */
     contentRef: text("content_ref"),
     bookingsEnabled: boolean("bookings_enabled").notNull().default(false),
+    /**
+     * Unused since October 2026: the site books instantly (no host
+     * approval). These three columns are kept rather than dropped so no
+     * existing database needs a destructive migration.
+     */
     bookingMode: bookingMode("booking_mode").notNull().default("REQUEST"),
-    /** How long the owner has to approve or decline a request. */
     requestResponseHours: smallint("request_response_hours")
       .notNull()
       .default(24),
-    /** How long an approved guest has to pay before the dates are released. */
     paymentWindowHours: smallint("payment_window_hours").notNull().default(24),
     ...timestamps,
   },
@@ -384,10 +386,29 @@ export const reservations = pgTable(
     ownerNote: text("owner_note"),
     /** Machine-readable reason a reservation needs the owner (e.g. PAYMENT_AFTER_EXPIRY). */
     reviewReason: text("review_reason"),
-    /** The guest asked to cancel (the owner decides what happens). */
+    /** The guest asked to cancel (legacy, before self-service cancellation). */
     cancellationRequestedAt: timestamp("cancellation_requested_at", {
       withTimezone: true,
     }),
+    /**
+     * When the guest submitted the booking (the start of the free
+     * cancellation window). Set once on the server; immutable (trigger).
+     */
+    requestedAt: timestamp("requested_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    /**
+     * Cancellations received strictly before this instant get a full refund
+     * (src/server/booking/cancellation-policy.ts). Immutable; null only for
+     * bookings made before the policy existed.
+     */
+    freeCancellationUntil: timestamp("free_cancellation_until", {
+      withTimezone: true,
+    }),
+    /** Which cancellation policy applied when booked (immutable snapshot). */
+    cancellationPolicy: text("cancellation_policy"),
+    /** "GUEST" or "OWNER:<email>". */
+    cancelledBy: text("cancelled_by"),
     idempotencyKey: text("idempotency_key").notNull().unique(),
     /** SHA-256 of the guest's booking-access token; the token is never stored. */
     accessTokenHash: text("access_token_hash").notNull(),
@@ -474,8 +495,11 @@ export const payments = pgTable(
     checkoutExpiresAt: timestamp("checkout_expires_at", { withTimezone: true }),
     /** For a REFUND row: the charge it refunds. */
     refundOfPaymentId: uuid("refund_of_payment_id"),
-    /** Admin who issued a refund; null for charges. */
+    /** Who issued a refund ("GUEST_POLICY", "AUTO_LATE_PAYMENT" or an admin email); null for charges. */
     initiatedBy: text("initiated_by"),
+    /** Refunds: calls made to the provider so far, and when to try next. */
+    providerAttempts: integer("provider_attempts").notNull().default(0),
+    nextAttemptAt: timestamp("next_attempt_at", { withTimezone: true }),
     /** Provider failure code only; never card details or raw messages. */
     failureCode: text("failure_code"),
     succeededAt: timestamp("succeeded_at", { withTimezone: true }),

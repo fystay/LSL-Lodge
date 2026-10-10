@@ -5,6 +5,7 @@ import {
   externalCalendarSources,
   jobRuns,
   notificationJobs,
+  payments,
   webhookEvents,
 } from "@/server/db/schema";
 
@@ -18,6 +19,7 @@ import {
 export const JOB_SCHEDULE = [
   { name: "expire-holds", staleAfterMinutes: 20 },
   { name: "send-notifications", staleAfterMinutes: 20 },
+  { name: "process-refunds", staleAfterMinutes: 20 },
   { name: "sync-calendars", staleAfterMinutes: 30 },
   { name: "maintenance", staleAfterMinutes: 3 * 60 },
 ] as const;
@@ -39,6 +41,8 @@ export interface SystemHealth {
   failedNotifications7d: number;
   failedWebhooks: number;
   staleCalendars: number;
+  stuckRefunds: number;
+  failedRefunds: number;
 }
 
 export async function systemHealth(
@@ -120,12 +124,41 @@ export async function systemHealth(
       ),
   );
 
+  // Refunds queued for over an hour (Stripe unreachable or not configured),
+  // or failed outright in the last 30 days.
+  const stuckRefunds = count(
+    await db
+      .select({ n: sql<number>`count(*)::int` })
+      .from(payments)
+      .where(
+        and(
+          eq(payments.kind, "REFUND"),
+          sql`${payments.status} IN ('PENDING', 'REQUIRES_ACTION')`,
+          lt(payments.createdAt, new Date(now.getTime() - 60 * 60_000)),
+        ),
+      ),
+  );
+  const failedRefunds = count(
+    await db
+      .select({ n: sql<number>`count(*)::int` })
+      .from(payments)
+      .where(
+        and(
+          eq(payments.kind, "REFUND"),
+          eq(payments.status, "FAILED"),
+          gt(payments.updatedAt, new Date(now.getTime() - 30 * 86_400_000)),
+        ),
+      ),
+  );
+
   const problems = [
     ...jobs.filter((j) => j.overdue).map((j) => `job_overdue:${j.name}`),
     ...(backlog > 0 ? ["notification_backlog"] : []),
     ...(failedNotifications > 0 ? ["notifications_failed"] : []),
     ...(failedWebhooks > 0 ? ["webhooks_failed"] : []),
     ...(staleCalendars > 0 ? ["calendar_sync_unhealthy"] : []),
+    ...(stuckRefunds > 0 ? ["refunds_stuck"] : []),
+    ...(failedRefunds > 0 ? ["refunds_failed"] : []),
   ];
   return {
     ok: problems.length === 0,
@@ -135,5 +168,7 @@ export async function systemHealth(
     failedNotifications7d: failedNotifications,
     failedWebhooks,
     staleCalendars,
+    stuckRefunds,
+    failedRefunds,
   };
 }

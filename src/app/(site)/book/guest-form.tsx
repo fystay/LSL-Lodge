@@ -6,10 +6,8 @@ import type { GuestField, HoldFormState } from "@/server/booking/guest-details";
 import { placeHold } from "./actions";
 
 export function GuestForm({
-  mode,
   stay,
 }: {
-  mode: "REQUEST" | "INSTANT";
   stay: {
     checkIn: string;
     checkOut: string;
@@ -147,7 +145,8 @@ export function GuestForm({
             >
               cancellation policy
             </Link>
-            .
+            , and I understand the booking is non-refundable after the first 24
+            hours.
           </label>
         </div>
         {errors.acceptTerms && (
@@ -165,13 +164,7 @@ export function GuestForm({
         disabled={pending}
         className="min-h-12 w-full rounded-soft bg-pine-800 px-6 font-semibold text-ivory hover:bg-pine-700 disabled:opacity-70 sm:w-auto"
       >
-        {mode === "REQUEST"
-          ? pending
-            ? "Sending your request…"
-            : "Send booking request"
-          : pending
-            ? "Holding your dates…"
-            : "Hold these dates"}
+        {pending ? "Holding your dates…" : "Continue to payment"}
       </button>
     </form>
   );

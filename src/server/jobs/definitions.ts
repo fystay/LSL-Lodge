@@ -10,6 +10,7 @@ import { getEmailSender } from "@/server/notifications/email";
 import { enqueueNotification } from "@/server/notifications/outbox";
 import { cancelOpenCheckouts } from "@/server/payments/checkout";
 import { getPaymentGateway } from "@/server/payments/gateway";
+import { processPendingRefunds } from "@/server/payments/refunds";
 import { pruneRateLimits } from "@/server/security/rate-limit";
 import { systemHealth } from "./health";
 import {
@@ -60,6 +61,21 @@ export const sendNotificationsJob: JobDefinition = {
         break;
     }
     return totals;
+  },
+};
+
+/**
+ * Sends queued refunds to Stripe and retries ones Stripe couldn't take
+ * (same idempotency key every time, so a retry never refunds twice).
+ * Without Stripe configured it does nothing; health then shows the queue.
+ */
+export const processRefundsJob: JobDefinition = {
+  name: "process-refunds",
+  everyMinutes: 5,
+  staleAfterMinutes: 20,
+  timeoutMs: 120_000,
+  async run(db, now) {
+    return processPendingRefunds(db, getPaymentGateway(), now);
   },
 };
 
@@ -118,6 +134,7 @@ export const maintenanceJob: JobDefinition = {
 export const JOBS: readonly JobDefinition[] = [
   expireHoldsJob,
   sendNotificationsJob,
+  processRefundsJob,
   syncCalendarsJob,
   maintenanceJob,
 ];

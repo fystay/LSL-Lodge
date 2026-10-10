@@ -13,13 +13,6 @@ import { notificationJobs } from "@/server/db/schema";
  */
 
 export const NOTIFICATION_TEMPLATES = {
-  request_received: "GUEST",
-  owner_new_request: "OWNER",
-  request_approved: "GUEST",
-  request_declined: "GUEST",
-  request_expired: "GUEST",
-  owner_request_expired: "OWNER",
-  payment_window_expired: "GUEST",
   payment_failed: "GUEST",
   booking_confirmed: "GUEST",
   owner_booking_confirmed: "OWNER",
@@ -28,8 +21,12 @@ export const NOTIFICATION_TEMPLATES = {
   owner_calendar_conflict: "OWNER",
   owner_system_alert: "OWNER",
   booking_cancelled: "GUEST",
-  owner_booking_withdrawn: "OWNER",
-  owner_cancellation_requested: "OWNER",
+  /** The guest cancelled; says whether a refund is on its way. */
+  guest_cancellation_confirmed: "GUEST",
+  /** A refund has been confirmed by Stripe. */
+  refund_completed: "GUEST",
+  owner_guest_cancelled: "OWNER",
+  owner_refund_failed: "OWNER",
 } as const;
 
 export type NotificationTemplate = keyof typeof NOTIFICATION_TEMPLATES;

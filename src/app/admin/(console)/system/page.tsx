@@ -12,13 +12,18 @@ import { runJobNowAction } from "../../actions";
 export const metadata = { title: "System" };
 
 const JOB_LABEL: Record<string, string> = {
-  "expire-holds": "Release lapsed requests and holds",
+  "expire-holds": "Release unpaid holds that have lapsed",
   "send-notifications": "Send emails",
+  "process-refunds": "Send and retry refunds",
   "sync-calendars": "Sync imported calendars",
   maintenance: "Housekeeping and health checks",
 };
 
 const PROBLEM_TEXT: Record<string, string> = {
+  refunds_stuck:
+    "A refund has been waiting more than an hour to reach Stripe or be confirmed. Check the booking's payments.",
+  refunds_failed:
+    "A refund failed in the last 30 days. Check the booking and refund manually in Stripe if needed.",
   notification_backlog: "Emails are waiting longer than 15 minutes to send.",
   notifications_failed:
     "Some emails failed in the last 7 days (see each booking's Messages).",

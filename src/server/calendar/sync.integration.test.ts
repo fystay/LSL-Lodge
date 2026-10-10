@@ -258,7 +258,7 @@ describe("syncIcalSource", () => {
     expect((await source(sourceId)).lastErrorCode).toBeNull();
   });
 
-  it("flags a clash with a website request without changing either side", async () => {
+  it("flags a clash with a website booking without changing either side", async () => {
     const { property, sourceId } = await setup();
     const req = await createHold(db, {
       propertyId: property.id,
@@ -269,7 +269,7 @@ describe("syncIcalSource", () => {
       idempotencyKey: randomUUID(),
       now: new Date(),
     });
-    if (!req.ok) throw new Error("expected request");
+    if (!req.ok) throw new Error("expected hold");
     const { fetcher } = feed(
       ok(calendar(["a@airbnb.com", "2027-03-05", "2027-03-10"])),
     );
@@ -283,7 +283,7 @@ describe("syncIcalSource", () => {
       .select()
       .from(reservations)
       .where(eq(reservations.id, req.reservationId));
-    expect(r.status).toBe("REQUESTED");
+    expect(r.status).toBe("PENDING_PAYMENT");
     expect((await periods(sourceId))[0].status).toBe("ACTIVE");
     const alerts = await db
       .select()
@@ -321,7 +321,7 @@ describe("export feed", () => {
       idempotencyKey: randomUUID(),
       now: new Date(),
     });
-    if (!req.ok) throw new Error("expected request");
+    if (!req.ok) throw new Error("expected hold");
     await db.insert(ownerBlocks).values({
       propertyId: property.id,
       startsOn: "2027-06-01",

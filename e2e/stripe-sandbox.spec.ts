@@ -1,10 +1,10 @@
 import { expect, test } from "@playwright/test";
 import postgres from "postgres";
-import { mintAdminSession } from "./admin-auth";
 
 /**
- * Real Stripe TEST-MODE lifecycle: request → approval → payment on Stripe's
- * hosted Checkout with a test card → confirmed exactly once.
+ * Real Stripe TEST-MODE lifecycle for instant booking: guest details → hold
+ * → straight to Stripe's hosted Checkout → test card → confirmed exactly
+ * once (only after server-side verification).
  *
  * Opt-in only: STRIPE_SANDBOX_E2E=true, a local E2E database
  * (E2E_BOOKING=true), and STRIPE_SECRET_KEY=sk_test_… plus
@@ -27,40 +27,24 @@ test.setTimeout(120_000);
 
 const stay = { checkIn: "2027-08-16", checkOut: "2027-08-19" }; // Mon → Thu
 
-test("guest pays the approved amount in test mode and the booking confirms once", async ({
+test("guest pays in full in test mode and the booking confirms once", async ({
   page,
-  browser,
 }, info) => {
   test.skip(info.project.name !== "desktop", "run once, on desktop");
 
-  // 1. Guest sends a request.
+  // 1–2. Guest enters details and goes straight to Stripe (no approval).
   await page.goto(
     `/book?checkIn=${stay.checkIn}&checkOut=${stay.checkOut}&guests=2`,
   );
   await page.getByLabel("Lead guest name").fill("Sandbox Guest");
   await page.getByLabel("Email address").fill("sandbox-guest@example.test");
   await page.getByLabel(/I have read the/).check();
-  await page.getByRole("button", { name: "Send booking request" }).click();
-  await expect(page).toHaveURL(/\/book\/LL-[A-Z0-9]{6}$/);
-  const ref = page.url().split("/").at(-1)!;
+  await page.getByRole("button", { name: "Continue to payment" }).click();
 
-  // 2. Owner approves.
-  const ownerContext = await browser.newContext();
-  await mintAdminSession(ownerContext);
-  const owner = await ownerContext.newPage();
-  await owner.goto("/admin");
-  await owner
-    .getByRole("region", { name: "Requests awaiting your decision" })
-    .getByRole("link", { name: ref })
-    .click();
-  await owner.getByRole("button", { name: "Approve request" }).click();
-  await expect(owner.getByRole("status")).toContainText("Approved.");
-  await ownerContext.close();
-
-  // 3. Guest pays on Stripe's hosted page with the standard test card.
-  await page.reload();
-  await page.getByRole("button", { name: /Pay .* securely/ }).click();
+  // 3. Guest pays on Stripe's hosted page with the standard test card. The
+  // cancellation deadline is shown beside the pay button.
   await page.waitForURL(/checkout\.stripe\.com/);
+  await expect(page.getByText(/Free cancellation until/)).toBeVisible();
   await page.locator("#cardNumber").fill("4242 4242 4242 4242");
   await page.locator("#cardExpiry").fill("12 / 34");
   await page.locator("#cardCvc").fill("123");
@@ -70,7 +54,8 @@ test("guest pays the approved amount in test mode and the booking confirms once"
   await page.getByTestId("hosted-payment-submit-button").click();
 
   // 4–5. Back on our page; confirmed only after server-side verification.
-  await page.waitForURL(new RegExp(`/book/${ref}`), { timeout: 60_000 });
+  await page.waitForURL(/\/book\/LL-[A-Z0-9]{6}/, { timeout: 60_000 });
+  const ref = new URL(page.url()).pathname.split("/").at(-1)!;
   await expect(page.getByRole("status").first()).toContainText("Confirmed", {
     timeout: 60_000,
   });

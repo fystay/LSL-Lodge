@@ -114,7 +114,7 @@ try {
   check("overlap exclusion constraint present", excl.n === 1);
 
   const triggers = (
-    await sql`SELECT tgname FROM pg_trigger WHERE tgrelid = 'public.reservations'::regclass AND NOT tgisinternal`.catch(
+    await sql`SELECT tgname FROM pg_trigger WHERE tgrelid IN ('public.reservations'::regclass, 'public.owner_blocks'::regclass) AND NOT tgisinternal`.catch(
       () => [],
     )
   ).map((r) => r.tgname as string);
@@ -122,6 +122,9 @@ try {
     "reservations_status_transition",
     "reservations_initial_status",
     "reservations_quote_immutable",
+    // Owner blocks and bookings can never overlap (either direction).
+    "reservations_owner_block_overlap",
+    "owner_blocks_booking_overlap",
   ])
     check(`trigger ${name}`, triggers.includes(name));
 

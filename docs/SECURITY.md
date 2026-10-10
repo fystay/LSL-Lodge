@@ -52,12 +52,12 @@
 - **Admin search** escapes `LIKE` wildcards; listings are capped at 50 rows.
 - **Seed script** refuses any non-local database host.
 
-### Added with the host-approval backend
+### Added with the booking backend
 
 - **Rate limiting** (Postgres-backed, `src/server/security/rate-limit.ts`):
-  booking requests 5 per hour per client IP and 3 per day per guest email
-  (a request holds dates for up to a day and sends email, so this limits
-  both calendar-hogging and using the form to email strangers); payment
+  new bookings (holds) 5 per hour per client IP and 3 per day per guest
+  email (a hold blocks dates for 35 minutes, so this limits
+  calendar-hogging); payment
   starts 10 per hour per booking; admin sign-in 10 per 15 minutes per IP;
   enquiries 5 per hour per IP. Subjects are stored only as hashes and pruned
   after two days. `RATE_LIMIT_SCALE` multiplies limits for E2E runs only.
@@ -80,12 +80,14 @@
   are shown only in admin. Owner emails carry no guest contact details.
 - **Calendar export feed**: HMAC token compared in constant time; same 404
   for disabled, unknown or wrong; "Not available" events only; `noindex`.
-- **Admin actions** added for approve/decline and calendar sync all call
+- **Admin actions** (blocks, cancellations, refunds, calendar sync) all call
   `requireAdmin()` and are scoped to the property (a source or booking from
   another property is "unknown").
-- **Instant booking, live Stripe and real email** each need their own
-  explicit environment approval flag (`INSTANT_BOOKING_APPROVED`,
-  `STRIPE_LIVE_MODE_APPROVED`, `EMAIL_LIVE_DELIVERY_APPROVED`).
+- **Live Stripe and real email** each need their own explicit environment
+  approval flag (`STRIPE_LIVE_MODE_APPROVED`, `EMAIL_LIVE_DELIVERY_APPROVED`).
+  Instant booking itself is the owner-chosen model (October 2026); public
+  bookings stay off in production until launch (`BOOKING_PREVIEW` is ignored
+  there).
 
 ## Admin authentication
 
@@ -134,13 +136,23 @@ page (CLI only for now), and email notification of new sign-ins.
 
 ## Refunds, cancellations and operations
 
-- Refunds are owner actions only (OWNER role, fresh second factor, explicit
-  confirmation), capped at what remains refundable on a verified charge,
-  sent with a Stripe idempotency key, audit-logged with the admin's email,
-  and tracked forward-only from Stripe's response and `refund.*` webhooks.
-  No refund amount or eligibility is computed from a policy.
-- Guests can only withdraw unpaid requests or ask to cancel; both use the
-  booking's cookie credential and are rate-limited.
+- Refunds are created only on the server, in three cases: (1) a guest
+  cancels strictly before their stored `free_cancellation_until`
+  (`requested_at` + 24 h, immutable in the database), which queues a full
+  refund in the same transaction as the cancellation; (2) money that isn't
+  owed for any stay (a duplicate payment, or a payment landing on a
+  cancelled or re-sold booking) is refunded in full automatically; (3) the
+  owner refunds an amount of their choosing (OWNER role, fresh second
+  factor, explicit confirmation). Every refund is capped at what remains
+  refundable on a verified charge, sent with a fixed Stripe idempotency key
+  (retries can't double-refund), audit-logged, and tracked forward-only from
+  Stripe's response and `refund.*` webhooks. A refund is shown as refunded
+  only once Stripe reports it `succeeded`. Failed sends retry with backoff
+  (`process-refunds` job) and after 6 attempts alert the owner.
+- Guests cancel only through their booking cookie credential (rate-limited);
+  refund eligibility is decided from the server's receipt time, never from
+  the browser. After the deadline a cancellation needs an explicit "no
+  refund" acknowledgement.
 - Job endpoints need `CRON_SECRET`; the health endpoint needs a separate
   read-only `HEALTHCHECK_SECRET`. Run records and alerts carry counts and
   codes only.
