@@ -5,9 +5,9 @@ import { cookies, headers } from "next/headers";
 import { redirect } from "next/navigation";
 import { createHold } from "@/server/booking/holds";
 import { releaseHoldBeforePayment } from "@/server/booking/resolution";
+import { checkoutReturnBase } from "@/server/booking/return-url";
 import { startCheckout } from "@/server/payments/checkout";
 import { getPaymentGateway } from "@/server/payments/gateway";
-import { siteUrl } from "@/lib/site";
 import {
   clientIp,
   consumeRateLimit,
@@ -126,7 +126,7 @@ export async function placeHold(
   if (gateway) {
     const checkout = await startCheckout(ctx.db, gateway, {
       reservationId: result.reservationId,
-      baseUrl: siteUrl,
+      baseUrl: checkoutReturnBase((await headers()).get("host")),
     });
     if (checkout.ok && STRIPE_CHECKOUT.test(checkout.url))
       redirect(checkout.url as Route);

@@ -66,7 +66,9 @@ export function CodeField({
         className={authInput}
       />
       <p id="code-hint" className="mt-1 text-sm text-ink-muted">
-        Or enter one of your recovery codes.
+        No rush: this page waits 10 minutes, and a code still works for 30
+        seconds after your app shows the next one. Or enter one of your recovery
+        codes.
       </p>
     </div>
   );
