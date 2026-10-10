@@ -214,6 +214,9 @@ export async function checkDatabase(
           ? pass(A, `isolated to schema "${schema}"`)
           : fail(A, `isolated to schema "${schema}"`, problems.join("; ")),
       );
+      // Unqualified names below would resolve outside the Lodge schema (e.g.
+      // to another application's `public.properties`): read nothing more.
+      if (problems.length > 0) return;
     } else {
       const [{ n }] = await tx`
         SELECT count(*)::int AS n FROM pg_tables
