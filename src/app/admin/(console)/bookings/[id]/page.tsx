@@ -68,6 +68,8 @@ const REVIEW_REASON: Record<string, string> = {
   NOT_APPROVED: "Payment was received for a request that was never approved.",
   REFUND_FAILED:
     "A refund could not be sent to Stripe after several attempts. Check the payment in Stripe and refund manually if needed.",
+  REFUND_FAILED_AT_PROVIDER:
+    "Stripe reported a refund as failed, so the guest hasn’t received it. Check the payment in Stripe, then refund again below.",
 };
 
 /** Never call a refund complete until Stripe has confirmed it. */

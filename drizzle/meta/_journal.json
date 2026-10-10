@@ -71,6 +71,13 @@
       "when": 1791613985441,
       "tag": "0009_cancellation_clock_from_confirmation",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1791621953127,
+      "tag": "0010_refund_failed_reopens",
+      "breakpoints": true
     }
   ]
 }

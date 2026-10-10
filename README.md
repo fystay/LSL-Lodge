@@ -30,6 +30,7 @@ and unblocks dates in `/admin/blocks`.
 - Owner inputs needed: [docs/OWNER-DECISIONS.md](docs/OWNER-DECISIONS.md)
 - Property facts and their sources: [docs/property-facts-and-policies.md](docs/property-facts-and-policies.md)
 - Launch checklist: [docs/LAUNCH-READINESS.md](docs/LAUNCH-READINESS.md)
+- Staging setup and customer demo: [docs/STAGING-SETUP.md](docs/STAGING-SETUP.md), [docs/DEMO.md](docs/DEMO.md)
 - Content and photography: [docs/CONTENT.md](docs/CONTENT.md)
 - Security notes: [docs/SECURITY.md](docs/SECURITY.md)
 

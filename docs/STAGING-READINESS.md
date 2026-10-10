@@ -1,9 +1,54 @@
 # Staging readiness
 
-Status: 10 October 2026, branch `claude/instant-booking`. Not merged, not
-deployed; production (lsllodge.vercel.app) untouched. **Not ready for a
-staging test yet**: the code is ready, but it needs a dedicated database,
-a dedicated Stripe sandbox and a host (see "Blockers").
+Status: 10 October 2026, branch `claude/instant-booking`. Not merged.
+Production (lsllodge.vercel.app) serves this branch with no environment
+variables, so its booking engine is off; nothing here changed it.
+
+**Staging is not ready, and a complete booking can't yet be demonstrated
+there.** The code, the demo tooling and the deployed-journey test are
+ready; staging still needs a Lodge database, a Lodge Stripe sandbox and the
+branch's Preview variables (see "Blockers"). Setup recipe:
+[STAGING-SETUP.md](STAGING-SETUP.md). Demo script and scenario coverage:
+[DEMO.md](DEMO.md).
+
+## Demo-readiness work (10 October 2026, latest)
+
+- **Staging recipe** ([STAGING-SETUP.md](STAGING-SETUP.md)): isolated
+  database options with costs and permissions; branch-scoped Preview
+  variables; migrations, demo seed, owner invite; webhook; scheduler;
+  protection bypass and sharing.
+- **`pnpm demo seed|status|reset`** (`scripts/demo.mts`): placeholder
+  property and prices; reset deletes only test-domain bookings and
+  `[DEMO]`-labelled blocks and calendar sources, and only on a database
+  marked by `seed`, on a confirmed host, without a live Stripe key.
+  Verified locally: a real booking, a real block, a real owner account and
+  their payment survived reset; the guards refused a non-local host, a live
+  key and an unmarked database.
+- **`pnpm stripe:test-setup`** (`scripts/stripe-test-setup.mts`): creates or
+  updates the staging webhook in the **Lodge** sandbox only. Refuses live
+  keys, a key from a different account than named, and any account that
+  already sends webhooks elsewhere (as the other app's sandbox does). Dry
+  run by default; the signing secret goes only to the operator's terminal
+  or a mode-600 file. Refusal paths verified offline; Stripe rejected a
+  fake key before anything was created. **Not run against a real
+  sandbox** (none exists).
+- **Deployed-journey test** (`e2e/staging-journey.spec.ts`, opt-in) and
+  Playwright remote mode (`E2E_BASE_URL`). Rehearsed against a local
+  production build with Stripe off: the 5 non-payment journeys pass, twice
+  in a row with a reset between (holds block other guests and the owner;
+  owner blocks; Airbnb dates block; stale feed pauses bookings; expired
+  hold frees dates; forged webhook refused). **The 6 Stripe journeys have
+  never run** (payment, duplicate/out-of-order replay, cancellation and
+  refund, declined card and hold release, refund failure, late payment).
+- **Fixed: refunds Stripe fails after accepting them.** Previously a
+  `refund.failed` (e.g. a closed card) was recorded but nobody was told,
+  and a booking already shown as refunded stayed "refunded". Now the
+  booking returns to "refund in progress", is flagged
+  `REFUND_FAILED_AT_PROVIDER`, the owner is alerted once, and the amount
+  can be refunded again. A failed or cancelled refund is final, so a
+  delayed "succeeded" event can't flip it back. Migration `0010` (additive:
+  replaces the status-transition function to allow REFUNDED →
+  REFUND_PENDING). Owner-screen text only; no guest-facing change.
 
 ## What was reviewed and changed
 
@@ -56,9 +101,9 @@ production is 22/22.
 | ------------------------------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------- |
 | Format, lint, typecheck, production build                                                                          | Pass                                                                                                                               |
 | Unit tests                                                                                                         | 249 passed                                                                                                                         |
-| Integration tests (PostgreSQL 16)                                                                                  | 145 passed                                                                                                                         |
+| Integration tests (PostgreSQL 16)                                                                                  | 146 passed                                                                                                                         |
 | E2E, booking engine off                                                                                            | 67 passed (booking/admin-only skipped by design)                                                                                   |
-| E2E, booking engine on                                                                                             | 99 passed; 29 skipped: 22 visual (run separately), 5 viewport-specific, 2 Stripe sandbox (need keys)                               |
+| E2E, booking engine on                                                                                             | 99 passed; 51 skipped: 22 visual (run separately), 22 staging journey (opt-in), 5 viewport-specific, 2 Stripe sandbox              |
 | Visual regression vs production                                                                                    | 22/22                                                                                                                              |
 | `drizzle-kit check`, `db:verify` (RLS, Data API roles denied, triggers, constraints)                               | Pass                                                                                                                               |
 | `pnpm audit --prod`                                                                                                | No known vulnerabilities                                                                                                           |
@@ -79,24 +124,25 @@ production is 22/22.
 | Airbnb sync                       | No feed link entered; only synthetic feeds tested. Without a source, the stale-data stop has nothing to check.                                                    |
 | Google Calendar                   | Not built (assessment only).                                                                                                                                      |
 
-## Blockers for a controlled staging test
+## Blockers for the customer demo on staging
 
-1. **Supabase project for the Lodge** (owner: upgrade, free a slot, or use
-   another organisation). Then `pnpm db:verify --migrate` against it
-   ([SUPABASE-DEV-SETUP.md](SUPABASE-DEV-SETUP.md)).
-2. **Dedicated Stripe sandbox for the Lodge**, its `sk_test_` key and
-   webhook secret in the host's secret manager, and a webhook endpoint with
-   API version `2026-09-30` and the checkout and refund events.
-3. **A host for staging** (e.g. a Vercel preview/staging environment with
-   the variables in `.env.example`); needs owner approval to deploy.
-4. **Hosted scheduler** (pg_cron in the Supabase project, recommended) and
-   an uptime monitor on `/api/health`.
-5. **Airbnb export link** added in `/admin/calendars`, and the site's export
-   link added to Airbnb.
-6. Owner admin account via `pnpm admin invite` on staging.
+All need the owner's access or approval; none can be done from here
+without it.
 
-Then run the 15 scenarios in [STRIPE-SANDBOX-TEST.md](STRIPE-SANDBOX-TEST.md)
-and record results.
+1. **A Lodge database** (choose an option in
+   [STAGING-SETUP.md](STAGING-SETUP.md) §1; recommended: free Supabase
+   under a separate account).
+2. **A Lodge Stripe sandbox** (free) and its test keys.
+3. **Approval to add Preview variables** for the branch on Vercel, and a
+   Protection Bypass for Automation secret.
+4. Then, on the operator's machine: migrate, `pnpm demo seed`,
+   `pnpm admin invite`, `pnpm stripe:test-setup --apply`, redeploy the
+   branch, and run the staging journey in full
+   ([STAGING-SETUP.md](STAGING-SETUP.md) §5–7). **Only when that passes is
+   staging demo-ready.**
+
+Not needed for the demo: a hosted scheduler, an Airbnb feed, email
+sending, monitoring.
 
 ## Blockers for launch (beyond staging)
 

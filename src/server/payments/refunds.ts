@@ -376,8 +376,13 @@ export async function applyRefundSnapshot(
     if (!row || (row.stripeRefundId && row.stripeRefundId !== snapshot.id))
       return null;
     const next = fromStripe(snapshot.status);
+    // Stripe can fail a refund after it succeeded, never the reverse, and
+    // webhooks can arrive out of order: failed and cancelled are final.
+    const final = row.status === "FAILED" || row.status === "CANCELED";
     const status =
-      RANK[next] >= RANK[row.status] && row.status !== next ? next : row.status;
+      !final && RANK[next] >= RANK[row.status] && row.status !== next
+        ? next
+        : row.status;
     await tx
       .update(payments)
       .set({
@@ -400,6 +405,32 @@ export async function applyRefundSnapshot(
         targetId: row.reservationId,
         metadata: { refundPaymentId: row.id, amountMinor: row.amountMinor },
       });
+    // Stripe accepted the refund but then reported it failed (e.g. the card
+    // was closed) or cancelled it: the guest is still owed the money. Flag
+    // the booking, alert the owner; the amount becomes refundable again.
+    if (
+      status !== row.status &&
+      (status === "FAILED" || status === "CANCELED")
+    ) {
+      await tx
+        .update(payments)
+        .set({ failureCode: "REFUND_FAILED_AT_PROVIDER" })
+        .where(eq(payments.id, row.id));
+      await tx
+        .update(reservations)
+        .set({ reviewReason: "REFUND_FAILED_AT_PROVIDER" })
+        .where(
+          and(
+            eq(reservations.id, row.reservationId),
+            isNull(reservations.reviewReason),
+          ),
+        );
+      await enqueueNotification(tx, {
+        template: "owner_refund_failed",
+        reservationId: row.reservationId,
+        idempotencyKey: `owner_refund_failed:${row.id}`,
+      });
+    }
     await settleAfterRefund(tx, row.reservationId);
     return status;
   });
@@ -463,6 +494,13 @@ async function settleAfterRefund(tx: Transaction, reservationId: string) {
       .where(eq(reservations.id, reservationId));
 
   if (r.status === "CANCELLED" && fullRefundUnderway)
+    await tx
+      .update(reservations)
+      .set({ status: "REFUND_PENDING" })
+      .where(eq(reservations.id, reservationId));
+  // A refund Stripe had confirmed was later reported failed: the booking is
+  // no longer fully refunded.
+  if (r.status === "REFUNDED" && !fullyRefunded)
     await tx
       .update(reservations)
       .set({ status: "REFUND_PENDING" })

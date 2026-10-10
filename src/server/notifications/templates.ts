@@ -242,7 +242,7 @@ export const TEMPLATES: Record<
       "Action needed: a refund couldn’t be issued",
       [
         {
-          p: "An automatic refund still hasn’t gone through after several attempts. The guest is owed this money. Please check the booking and Stripe.",
+          p: "A refund hasn’t gone through: either Stripe couldn’t take the request after several attempts, or Stripe reported the refund as failed. The guest is owed this money. Please check the booking and Stripe, and refund again from the booking page if needed.",
         },
         { list: stayLines(d) },
         adminLink(d),

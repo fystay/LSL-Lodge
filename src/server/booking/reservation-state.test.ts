@@ -46,8 +46,8 @@ describe("reservation state machine", () => {
     expect(ALLOWED_TRANSITIONS.EXPIRED).toEqual(["REQUIRES_REVIEW"]);
   });
 
-  it("treats REFUNDED as terminal", () => {
-    expect(ALLOWED_TRANSITIONS.REFUNDED).toEqual([]);
+  it("reopens REFUNDED only to REFUND_PENDING (a refund Stripe later failed)", () => {
+    expect(ALLOWED_TRANSITIONS.REFUNDED).toEqual(["REFUND_PENDING"]);
   });
 
   it("keeps requests, holds and review cases blocking the calendar", () => {

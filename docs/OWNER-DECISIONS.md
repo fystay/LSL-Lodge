@@ -24,17 +24,24 @@ Facts gathered so far, with sources: [property-facts-and-policies.md](property-f
 
 ## Blocking test-mode payments and email (accounts)
 
-- [ ] **Supabase project for the Lodge.** Creating `lodge-on-the-lake-dev`
-      was tried on 10 October 2026 and refused: your account is at the free
+- [ ] **A database for the Lodge's staging site.** Creating a Supabase
+      project was refused on 10 October 2026: your account is at the free
       plan's limit of 2 active projects (both belong to another app and were
-      not touched). Choose: upgrade the organisation (a cost), pause/delete
-      one of those projects, or use a separate organisation. Pricing tier
-      and backups (PITR) to confirm.
+      not touched). Choose one; options, costs and steps are in
+      [STAGING-SETUP.md](STAGING-SETUP.md) §1. Recommended: a free Supabase
+      account just for the Lodge. Alternatives: Neon's free plan through
+      Vercel (approve creating it), or Supabase Pro (from $25/month).
 - [ ] **Stripe.** "FYStay sandbox" belongs to another app (it has that app's
-      webhooks). Create a **dedicated Stripe sandbox for the Lodge**, then
-      put its **test** secret key and webhook signing secret in the hosting
-      secret manager (never in chat or git). Live mode stays off until you
-      approve it.
+      webhooks) and won't be used. Create a **dedicated, free Stripe
+      sandbox for the Lodge**; then `pnpm stripe:test-setup` creates its
+      webhook ([STAGING-SETUP.md](STAGING-SETUP.md) §2 and §5). Its **test**
+      keys and webhook secret go in Vercel's Preview variables for the
+      branch (never in chat or git). Live mode stays off until you approve
+      it.
+- [ ] **Staging on Vercel:** approve adding Preview variables for the
+      branch `claude/instant-booking`, and generate a Protection Bypass for
+      Automation secret (for the automated check and Stripe's webhooks).
+      Production is unaffected: bookings can't run there.
 - [ ] **Resend** (or another provider), a sending domain, and DNS access for
       SPF, DKIM and DMARC. Real guest emails stay off until you approve them.
 - [ ] **Admin users**: who gets an account (owner, and any read-only

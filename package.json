@@ -23,7 +23,9 @@
     "check": "pnpm format:check && pnpm lint && pnpm typecheck && pnpm test",
     "db:seed:dev": "tsx scripts/seed-dev.mts",
     "admin": "tsx --conditions=react-server scripts/admin.mts",
-    "db:verify": "tsx scripts/db-verify.mts"
+    "db:verify": "tsx scripts/db-verify.mts",
+    "demo": "tsx scripts/demo.mts",
+    "stripe:test-setup": "tsx scripts/stripe-test-setup.mts"
   },
   "dependencies": {
     "drizzle-orm": "0.45.3",

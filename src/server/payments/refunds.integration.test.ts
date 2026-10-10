@@ -26,6 +26,7 @@ import {
 import { applyCheckoutSession, startCheckout } from "./checkout";
 import {
   REFUND_MAX_ATTEMPTS,
+  applyRefundSnapshot,
   issueRefund,
   processPendingRefunds,
   sendRefund,
@@ -461,6 +462,49 @@ describe("guest cancellation under the 24-hour policy", () => {
     expect(await refundRows(reservationId)).toHaveLength(0);
     // The dates are bookable again.
     expect(await request(property.id)).toBeTruthy();
+  });
+
+  it("reopens a refunded booking and alerts the owner when Stripe later reports the refund failed", async () => {
+    const { property, reservationId, gateway, charge } = await paidBooking();
+    const at = new Date(PAID_AT.getTime() + HOUR);
+    const result = await cancel(property.id, reservationId, at);
+    if (!result.ok || result.outcome !== "CANCELLED_WITH_REFUND")
+      throw new Error("expected a policy refund");
+    expect(await sendRefund(db, gateway, result.refundIds[0], at)).toBe(
+      "SUCCEEDED",
+    );
+    expect((await load(reservationId)).status).toBe("REFUNDED");
+    const [refund] = await refundRows(reservationId);
+    const snapshot = gateway.refunds.get(refund.stripeRefundId!)!;
+
+    // e.g. test card 4000 0000 0000 5126: succeeded, then refund.failed.
+    const failed = { ...snapshot, status: "failed" as const };
+    expect(await applyRefundSnapshot(db, failed)).toBe("FAILED");
+    const r = await load(reservationId);
+    expect(r.status).toBe("REFUND_PENDING");
+    expect(r.reviewReason).toBe("REFUND_FAILED_AT_PROVIDER");
+    expect(await templates(reservationId)).toContain("owner_refund_failed");
+    // A duplicate delivery changes nothing and alerts once.
+    expect(await applyRefundSnapshot(db, failed)).toBe("FAILED");
+    expect(
+      (await templates(reservationId)).filter(
+        (t) => t === "owner_refund_failed",
+      ),
+    ).toHaveLength(1);
+    // A late "succeeded" for the failed refund doesn't move it back.
+    expect(await applyRefundSnapshot(db, snapshot)).toBe("FAILED");
+
+    // The owner refunds again; once Stripe confirms, it is refunded.
+    expect(
+      await issueRefund(db, gateway, {
+        propertyId: property.id,
+        reservationId,
+        chargePaymentId: charge.id,
+        amountMinor: charge.amountMinor,
+        actor: OWNER,
+      }),
+    ).toEqual({ ok: true, status: "SUCCEEDED" });
+    expect((await load(reservationId)).status).toBe("REFUNDED");
   });
 
   it("refunds in full 1 ms before the deadline, and only once Stripe confirms is it refunded", async () => {

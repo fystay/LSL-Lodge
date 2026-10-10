@@ -58,7 +58,10 @@ export async function mintAdminSession(
       // Chrome treats localhost as a secure context, so the production
       // build's Secure, __Host- cookie works over http://localhost; DevTools
       // only accepts setting such a cookie against an https URL.
-      url: `${ADMIN_COOKIE.startsWith("__Host-") ? "https" : "http"}://localhost:${process.env.E2E_PORT ?? 3100}`,
+      // Against a deployed staging site (E2E_BASE_URL), its https origin.
+      url: process.env.E2E_BASE_URL
+        ? new URL(process.env.E2E_BASE_URL).origin
+        : `${ADMIN_COOKIE.startsWith("__Host-") ? "https" : "http"}://localhost:${process.env.E2E_PORT ?? 3100}`,
       httpOnly: true,
       secure: ADMIN_COOKIE.startsWith("__Host-"),
       sameSite: "Strict",

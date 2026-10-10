@@ -74,7 +74,9 @@ export const ALLOWED_TRANSITIONS: Record<
   // A refund owed under the cancellation policy may follow cancellation.
   CANCELLED: ["REFUND_PENDING"],
   REFUND_PENDING: ["REFUNDED", "REQUIRES_REVIEW"],
-  REFUNDED: [],
+  // Reopened only if Stripe later reports a confirmed refund as failed: the
+  // guest is owed the money again.
+  REFUNDED: ["REFUND_PENDING"],
   // Owner resolves conflicts and exceptional payment/calendar states. Moving
   // to CONFIRMED additionally requires a recorded, verified payment
   // (enforced in confirmReviewedBooking, src/server/booking/resolution.ts).
