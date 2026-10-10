@@ -157,10 +157,18 @@ for a full refund; after that the booking is non-refundable." Implemented in
   move the deadline (tested). A delayed webhook that is the first
   verification starts the clock when it arrives.
 - **Before payment** there is no deadline; guests are told the 24 hours
-  start once payment is confirmed (details page, Stripe's page, booking
-  page). A paid-but-unverified hold has no deadline; cancelling it releases
-  the hold, and a payment that lands afterwards is refunded in full
-  automatically.
+  start once payment is confirmed (details page and Stripe's page). A
+  payment that lands on a hold that was already released is refunded in
+  full automatically.
+- **How guests cancel (owner-approved, October 2026):** the booking page
+  shows the deadline and "To cancel, contact the owner". There is no guest
+  cancellation form. The owner records the request on the booking in
+  `/admin` ("The guest asked to cancel") with the time it reached them
+  (UK time, to the minute). Eligibility is decided by that time, not by
+  when the owner records it. It can't be in the future or before the
+  booking was made; the audit log keeps both times and the owner's account.
+  The domain function (`guestCancel` with `recordedBy`) also supports a
+  guest-facing form if the owner approves one later.
 - **Boundary:** a cancellation is refundable only if the server receives it
   **strictly before** `free_cancellation_until`. Exactly at the deadline,
   or later, it is non-refundable. Tests cover 1 ms before, exactly at and
@@ -175,10 +183,13 @@ for a full refund; after that the booking is non-refundable." Implemented in
   `refund.*` webhook). Failed sends retry with backoff via the
   `process-refunds` job; after 6 attempts the refund is marked FAILED and the
   owner alerted.
-- After the window: the guest must tick "I understand I will not receive a
-  refund"; the booking is cancelled with no refund created.
-- Unpaid holds can be released at any time; a payment still settling blocks
-  cancellation until it resolves.
+- After the window: the booking is cancelled with no refund created.
+- Unpaid holds: released automatically if Stripe Checkout can't be opened
+  (the guest sees the form's existing error) or if the guest leaves
+  Stripe's page (its cancel link carries the checkout's payment ID; the
+  guest returns to `/book` for the same dates). Otherwise they lapse after
+  30 minutes. A payment still settling blocks cancellation until it
+  resolves.
 - Owner cancellations are outside the guest policy: the owner decides any
   refund from the booking page.
 

@@ -39,26 +39,20 @@ Facts gathered so far, with sources: [property-facts-and-policies.md](property-f
       viewers). Each person sets up their own password and authenticator
       app from a one-time link; you'll need a phone authenticator app.
 
-## Waiting for your approval (UI)
+## UI decisions
 
-You asked that the production UI stay unchanged unless you authorise a
-change. These are listed in [FRONTEND-CHANGES.md](FRONTEND-CHANGES.md)
-with screenshots-based checks in [VISUAL-REGRESSION.md](VISUAL-REGRESSION.md):
-
-- [ ] **Booking details page (`/book`)**: one added sentence, "The 24-hour
-      free-cancellation period starts once your payment is confirmed. After
-      that, the booking is non-refundable." Not visible on production today
-      (online booking is off there).
-- [ ] **Booking status page (`/book/[ref]`)**: the page guests return to
-      after paying. Production has a preview version with no payment,
-      confirmation, deadline or cancellation. The branch's version adds
-      those, using the site's existing components. Approve it, or ask for a
-      smaller version.
-- [ ] **Cancellation policy page (`/cancellation-policy`)**: unchanged
-      (still the draft notice). Proposed text is in FRONTEND-CHANGES.md;
-      it will only be published with your approval.
-- [ ] **Owner dashboard (`/admin`)**: not guest-facing; changed by the
-      earlier admin-security and booking work (listed in the same file).
+- [x] **Booking details page (`/book`)**: the one sentence about the 24-hour
+      period starting at payment (approved 10 October 2026).
+- [x] **Booking status page (`/book/[ref]`)**: production's page plus the
+      confirmed status, the cancellation deadline and "contact the owner to
+      cancel" (approved). No guest cancellation form; you record
+      cancellations in `/admin`.
+- [ ] **Cancellation policy page**: still the draft notice; proposed text
+      in [FRONTEND-CHANGES.md](FRONTEND-CHANGES.md).
+- [ ] **"Full payment due now" after payment**: production's price box
+      keeps saying "due now" on a paid booking. Change it to "paid"?
+- [ ] **A guest self-cancel form** (optional, later): the backend supports
+      it; not added without your approval.
 
 ## Blocking real bookings (business rules)
 

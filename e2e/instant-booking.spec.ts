@@ -1,4 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
+import postgres from "postgres";
 import { mintAdminSession } from "./admin-auth";
 
 /**
@@ -39,18 +40,62 @@ async function holdDates(page: Page, [checkIn, checkOut]: readonly string[]) {
   return page.url().split("/").at(-1)!;
 }
 
-test("guest releases an unpaid hold; nothing is charged and the dates free up", async ({
+test("a confirmed booking shows its deadline and 'contact the owner to cancel'; the owner records the guest's request", async ({
   page,
+  browser,
 }, info) => {
   const stay = weeks[info.project.name as Project].release;
-  await holdDates(page, stay);
-  await page.getByText("Cancel and release these dates").click();
-  await page.getByLabel("Yes, release these dates").check();
-  await page.getByRole("button", { name: "Release dates" }).click();
+  const ref = await holdDates(page, stay);
+  // Stand-in for verified payment (Stripe isn't configured in this run):
+  // confirm the booking as the payment code would, 24 h deadline included.
+  const sql = postgres(process.env.DATABASE_URL!, { max: 1 });
+  try {
+    await sql`
+      UPDATE reservations
+      SET status = 'CONFIRMED', hold_expires_at = NULL,
+          confirmed_at = now(), free_cancellation_until = now() + interval '24 hours'
+      WHERE public_ref = ${ref}`;
+  } finally {
+    await sql.end();
+  }
+  await page.reload();
+  const status = page.getByRole("status").filter({ hasText: "Status:" });
+  await expect(status).toContainText("Status: confirmed.");
+  await expect(status).toContainText(/full refund until .* \(UK\s+time\)/);
   await expect(
-    page.getByRole("alert").filter({ hasText: "nothing was charged" }),
-  ).toBeVisible();
-  await expect(page.getByRole("status").first()).toContainText("Cancelled");
+    status.getByRole("link", { name: "contact the owner" }),
+  ).toHaveAttribute("href", "/contact");
+  // No guest cancellation form.
+  await expect(page.getByRole("button", { name: /cancel/i })).toHaveCount(0);
+
+  // The owner records the guest's request, received just now: inside the
+  // 24 hours, so the policy refund applies (nothing was charged here).
+  const context = await browser.newContext();
+  await mintAdminSession(context);
+  const owner = await context.newPage();
+  await owner.goto("/admin/bookings");
+  await owner.getByRole("link", { name: ref }).click();
+  const received = new Intl.DateTimeFormat("sv-SE", {
+    timeZone: "Europe/London",
+    dateStyle: "short",
+    timeStyle: "short",
+  })
+    .format(new Date())
+    .replace(" ", "T");
+  await owner.getByLabel("Request received (UK time)").fill(received);
+  await owner.getByLabel("Yes, the guest asked to cancel this booking").check();
+  await owner
+    .getByRole("button", { name: "Cancel at guest’s request" })
+    .click();
+  await expect(owner.getByRole("status").first()).toContainText(
+    "within 24 hours of confirmation",
+  );
+  await context.close();
+
+  await page.reload();
+  await expect(page.getByRole("status").first()).not.toContainText(
+    "Status: confirmed",
+  );
   await page.goto(
     `/availability?checkIn=${stay[0]}&checkOut=${stay[1]}&guests=2`,
   );

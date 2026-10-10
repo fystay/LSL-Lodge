@@ -150,10 +150,14 @@ page (CLI only for now), and email notification of new sign-ins.
   Stripe's response and `refund.*` webhooks. A refund is shown as refunded
   only once Stripe reports it `succeeded`. Failed sends retry with backoff
   (`process-refunds` job) and after 6 attempts alert the owner.
-- Guests cancel only through their booking cookie credential (rate-limited);
-  refund eligibility is decided from the server's receipt time, never from
-  the browser. After the deadline a cancellation needs an explicit "no
-  refund" acknowledgement.
+- Guests cancel by contacting the owner; there is no guest cancellation
+  endpoint. The owner records it (OWNER role, fresh second factor, explicit
+  confirmation) with the time the request arrived, which can't be in the
+  future or before the booking; eligibility follows the 24-hour rule
+  against that time, and the audit log records both times and the owner.
+- Stripe's "back" link releases only an unpaid hold, and only with the
+  booking cookie plus the payment ID from that checkout (unguessable), so a
+  third-party link can't release someone's hold.
 - Job endpoints need `CRON_SECRET`; the health endpoint needs a separate
   read-only `HEALTHCHECK_SECRET`. Run records and alerts carry counts and
   codes only.

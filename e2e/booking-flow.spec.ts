@@ -89,22 +89,18 @@ test("guest books instantly; the dates are held and unavailable to others", asyn
   await expect(
     page.getByRole("heading", { name: /Booking reference LL-/ }),
   ).toBeVisible();
-  // A hold is never presented as a confirmed booking.
-  await expect(page.getByRole("status").first()).toContainText(
-    "Dates held: awaiting your payment",
+  // Production's page: a hold is never presented as a confirmed booking,
+  // and no cancellation deadline exists before payment.
+  const status = page.getByRole("status").filter({ hasText: "holding" });
+  await expect(status).toContainText("We’re holding these dates for you");
+  await expect(status).toContainText(
+    "confirmed only once payment has been verified",
   );
-  await expect(page.getByRole("status").first()).toContainText("not booked");
-  await expect(page.getByRole("status").first()).not.toContainText("Confirmed");
-  // Not paid, so no deadline yet.
+  await expect(status).not.toContainText("Status: confirmed");
   await expect(
     page.getByText(/You can cancel for a full refund until/),
   ).toHaveCount(0);
-  await expect(
-    page.getByText(/starts once your payment is confirmed/).first(),
-  ).toBeVisible();
-  await expect(
-    page.getByText("Online payment isn’t switched on in this preview"),
-  ).toBeVisible();
+  await expect(page.getByText("Payment isn’t switched on yet.")).toBeVisible();
   const holdUrl = page.url();
 
   // A different visitor (no cookie) sees the not-found page, not the booking.

@@ -10,11 +10,12 @@ simulated, and what blocks launch.
 | Check                                    | Result                                                                                                                                                                                             |
 | ---------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `pnpm format:check`, `lint`, `typecheck` | Pass                                                                                                                                                                                               |
-| `pnpm test` (unit)                       | 245 passed                                                                                                                                                                                         |
-| `pnpm test:integration`                  | 125 passed                                                                                                                                                                                         |
+| `pnpm test` (unit)                       | 248 passed                                                                                                                                                                                         |
+| `pnpm test:integration`                  | 140 passed                                                                                                                                                                                         |
 | `pnpm build`                             | Pass                                                                                                                                                                                               |
-| `pnpm test:e2e`, booking engine off      | 64 passed, 42 skipped (booking/admin-only)                                                                                                                                                         |
-| `pnpm test:e2e`, booking engine on       | 96 passed, 6 skipped (4 layout-specific, 2 Stripe sandbox needing keys)                                                                                                                            |
+| `pnpm test:e2e`, booking engine off      | 67 passed (booking/admin-only tests skipped)                                                                                                                                                       |
+| `pnpm test:e2e`, booking engine on       | 99 passed, 7 skipped (5 layout-specific, 2 Stripe sandbox needing keys)                                                                                                                            |
+| Visual regression vs production          | 22/22 match (11 public routes × desktop/mobile; baselines from production's commit, checked against the live site)                                                                                 |
 | `pnpm audit --prod --audit-level high`   | No known vulnerabilities                                                                                                                                                                           |
 | `drizzle-kit check` and regeneration     | Schema and 9 migrations consistent                                                                                                                                                                 |
 | `pnpm db:verify` on the local database   | All checks pass (tables, constraints, triggers incl. block/booking overlap, indexes, RLS)                                                                                                          |
@@ -65,7 +66,9 @@ What the tests prove, among other things:
 
 - [ ] Rates, fees, taxes, minimum stay, check-in/out times
 - [ ] Hold length while paying (default 30 minutes)
-- [ ] Owner approval of the frontend differences in docs/FRONTEND-CHANGES.md
+- [x] Owner approval of the /book sentence and the minimal /book/[ref]
+      status page (docs/FRONTEND-CHANGES.md)
+- [ ] Cancellation policy page text
 - [ ] Owner-cancellation, no-show and amendment terms; booking terms;
       privacy notice; legal review (the 24-hour guest cancellation policy is
       confirmed and implemented)

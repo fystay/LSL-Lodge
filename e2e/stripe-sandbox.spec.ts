@@ -58,9 +58,12 @@ test("guest pays in full in test mode and the booking confirms once", async ({
   // 4–5. Back on our page; confirmed only after server-side verification.
   await page.waitForURL(/\/book\/LL-[A-Z0-9]{6}/, { timeout: 60_000 });
   const ref = new URL(page.url()).pathname.split("/").at(-1)!;
-  await expect(page.getByRole("status").first()).toContainText("Confirmed", {
-    timeout: 60_000,
-  });
+  await expect(page.getByRole("status").first()).toContainText(
+    "Status: confirmed",
+    {
+      timeout: 60_000,
+    },
+  );
   // Now the deadline exists: 24 hours after the verified payment.
   await expect(
     page.getByText(/You can cancel for a full refund until/),
