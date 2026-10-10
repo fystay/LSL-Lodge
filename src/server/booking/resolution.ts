@@ -16,7 +16,7 @@ import {
   loadBlocks,
   type BlockSource,
 } from "./availability";
-import { refundEligible } from "./cancellation-policy";
+import { confirmationColumns, refundEligible } from "./cancellation-policy";
 
 /**
  * Owner and guest actions on existing bookings. Guest cancellations follow
@@ -137,9 +137,10 @@ export async function confirmReviewedBooking(
       .update(reservations)
       .set({
         status: "CONFIRMED",
-        confirmedAt: now,
         reviewReason: null,
         holdExpiresAt: null,
+        // The 24 hours start now, unless the booking was confirmed before.
+        ...confirmationColumns(now),
       })
       .where(eq(reservations.id, r.id));
     await audit(tx, "reservation.confirmed_after_review", r.id, input.actor, {

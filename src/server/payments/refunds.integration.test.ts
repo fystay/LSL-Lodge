@@ -39,10 +39,12 @@ beforeEach(async () => resetTables(db));
 // Synthetic data only; the gateway is in memory.
 const NOW = new Date("2026-10-08T12:00:00Z");
 const HOUR = 3_600_000;
-/** Unpaid holds last 35 minutes; this is safely past that. */
+/** Unpaid holds last 30 minutes; this is safely past that. */
 const LAPSED = 40 * 60_000;
-/** The free-cancellation deadline for a booking requested at NOW. */
-const DEADLINE = new Date(NOW.getTime() + 24 * HOUR);
+/** paidBooking's payment is verified (and the booking confirmed) here. */
+const PAID_AT = new Date(NOW.getTime() + 10 * 60_000);
+/** The free-cancellation deadline: 24 hours after verified payment. */
+const DEADLINE = new Date(PAID_AT.getTime() + 24 * HOUR);
 const OWNER = "owner@example.test";
 const BASE = "http://localhost:3000";
 
@@ -68,8 +70,9 @@ async function paidBooking() {
   const property = await createBookableProperty(db);
   const reservationId = await request(property.id);
   const gateway = new FakeGateway();
-  // Paid 10 minutes after booking: the 24 hours still run from the booking.
-  const paidAt = new Date(NOW.getTime() + 10 * 60_000);
+  // Paid 10 minutes after the booking was submitted; the 24 hours run from
+  // this verified payment, not from the submission.
+  const paidAt = PAID_AT;
   await startCheckout(db, gateway, {
     reservationId,
     baseUrl: BASE,
@@ -541,14 +544,38 @@ describe("guest cancellation under the 24-hour policy", () => {
       );
     });
 
-  it("counts the 24 hours from the booking, not from the payment", async () => {
-    // paidBooking pays 10 minutes after booking; 24 h after payment is late.
+  it("counts the 24 hours from verified payment, not from when the booking was submitted", async () => {
     const { property, reservationId } = await paidBooking();
-    const dayAfterPayment = new Date(NOW.getTime() + 24 * HOUR + 5 * 60_000);
-    expect(await cancel(property.id, reservationId, dayAfterPayment)).toEqual({
-      ok: false,
-      reason: "ACK_REQUIRED",
+    const r = await load(reservationId);
+    expect(r.requestedAt.toISOString()).toBe(NOW.toISOString());
+    expect(r.confirmedAt?.toISOString()).toBe(PAID_AT.toISOString());
+    expect(r.freeCancellationUntil?.toISOString()).toBe(DEADLINE.toISOString());
+    // 24 h after the booking was submitted, but before 24 h after payment:
+    // still inside the window.
+    const dayAfterSubmission = new Date(NOW.getTime() + 24 * HOUR + 60_000);
+    expect(dayAfterSubmission < DEADLINE).toBe(true);
+    expect(
+      await cancel(property.id, reservationId, dayAfterSubmission),
+    ).toMatchObject({
+      ok: true,
+      outcome: "CANCELLED_WITH_REFUND",
     });
+  });
+
+  it("treats cancelling an unconfirmed hold as a release, with no deadline involved", async () => {
+    // Paid at Stripe but not yet verified by us: the booking isn't
+    // confirmed, so there's no deadline; the guest can only release the hold,
+    // and if the payment then lands it is refunded in full automatically.
+    const property = await createBookableProperty(db);
+    const reservationId = await request(property.id);
+    expect((await load(reservationId)).freeCancellationUntil).toBeNull();
+    expect(
+      await cancel(
+        property.id,
+        reservationId,
+        new Date(NOW.getTime() + 60_000),
+      ),
+    ).toMatchObject({ ok: true, outcome: "HOLD_RELEASED" });
   });
 
   it("can't cancel twice or refund twice, even concurrently", async () => {

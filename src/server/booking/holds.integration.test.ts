@@ -39,7 +39,7 @@ afterAll(async () => db.$client.end());
 const NOW = new Date("2026-10-08T12:00:00Z");
 const MINUTE = 60_000;
 /** How long an unpaid hold keeps the dates. */
-const HOLD = 35 * MINUTE;
+const HOLD = 30 * MINUTE;
 
 async function setupProperty(
   overrides: Partial<typeof properties.$inferInsert> = {},
@@ -104,10 +104,7 @@ describe("createHold", () => {
     if (!result.ok) return;
 
     expect(result.quote.totalMinor).toBe(30_000);
-    expect(result.holdExpiresAt.toISOString()).toBe("2026-10-08T12:35:00.000Z");
-    expect(result.freeCancellationUntil.toISOString()).toBe(
-      "2026-10-09T12:00:00.000Z",
-    );
+    expect(result.holdExpiresAt.toISOString()).toBe("2026-10-08T12:30:00.000Z");
     expect(result.publicRef).toMatch(/^LL-[A-HJ-NP-Z2-9]{6}$/);
 
     const schedule = await db
@@ -124,10 +121,12 @@ describe("createHold", () => {
       .where(eq(reservations.id, result.reservationId));
     expect(row.status).toBe("PENDING_PAYMENT");
     expect(row.requestedAt.toISOString()).toBe(NOW.toISOString());
-    expect(row.freeCancellationUntil?.toISOString()).toBe(
-      "2026-10-09T12:00:00.000Z",
+    // The 24-hour window hasn't started: it starts at verified payment.
+    expect(row.confirmedAt).toBeNull();
+    expect(row.freeCancellationUntil).toBeNull();
+    expect(row.cancellationPolicy).toBe(
+      "FULL_REFUND_WITHIN_24H_OF_CONFIRMATION",
     );
-    expect(row.cancellationPolicy).toBe("FULL_REFUND_WITHIN_24H_OF_REQUEST");
     expect(row.accessTokenHash).not.toBe(result.accessToken);
 
     const audits = await db
@@ -144,24 +143,47 @@ describe("createHold", () => {
     ).toHaveLength(0);
   });
 
-  it("never moves the free-cancellation deadline once recorded", async () => {
+  it("lets the confirmation time and deadline be set once, consistently, and never moved", async () => {
     const property = await setupProperty();
     const result = await createHold(
       db,
       input(property.id, "2027-03-01", "2027-03-04"),
     );
     if (!result.ok) throw new Error("expected hold");
+    const byId = eq(reservations.id, result.reservationId);
+    const confirmedAt = new Date("2026-10-08T12:10:00Z");
+    // A deadline that isn't confirmed_at + 24 h is refused by the database.
+    await expect(
+      db
+        .update(reservations)
+        .set({
+          confirmedAt,
+          freeCancellationUntil: new Date("2026-10-09T12:00:00Z"),
+        })
+        .where(byId),
+    ).rejects.toThrow();
+    await db
+      .update(reservations)
+      .set({
+        confirmedAt,
+        freeCancellationUntil: new Date("2026-10-09T12:10:00Z"),
+      })
+      .where(byId);
     for (const change of [
       { requestedAt: new Date() },
+      { confirmedAt: new Date("2026-10-08T14:00:00Z") },
+      { confirmedAt: null },
       { freeCancellationUntil: new Date("2030-01-01T00:00:00Z") },
+      { freeCancellationUntil: null },
       { cancellationPolicy: "SOMETHING_ELSE" },
     ])
       await expect(
-        db
-          .update(reservations)
-          .set(change)
-          .where(eq(reservations.id, result.reservationId)),
+        db.update(reservations).set(change).where(byId),
       ).rejects.toThrow();
+    const [row] = await db.select().from(reservations).where(byId);
+    expect(row.freeCancellationUntil?.toISOString()).toBe(
+      "2026-10-09T12:10:00.000Z",
+    );
   });
 
   it("lets the guest find the booking only with the right token", async () => {

@@ -14,7 +14,8 @@ import type { PaymentGateway, RefundSnapshot } from "./gateway";
 /**
  * Refunds, through Stripe, for two sources:
  * - the cancellation policy: a guest who cancels strictly within 24 hours
- *   of booking gets everything they paid back, automatically
+ *   of the booking being confirmed gets everything they paid back,
+ *   automatically
  *   (src/server/booking/resolution.ts), and a payment that lands on an
  *   already cancelled booking is returned in full;
  * - the owner, who may refund any amount up to what's left of a charge.

@@ -142,7 +142,7 @@ export const TEMPLATES: Record<
         { list: stayLines(d) },
         d.freeCancellationUntil
           ? {
-              p: `Cancellation: you can cancel for a full refund before ${d.freeCancellationUntil} (UK time), 24 hours after you booked. After that the booking is non-refundable. You can cancel from your booking page.`,
+              p: `Cancellation: you can cancel for a full refund before ${d.freeCancellationUntil} (UK time), 24 hours after your payment was confirmed. After that the booking is non-refundable. You can cancel from your booking page.`,
             }
           : { p: "Cancellation: see the cancellation policy below." },
         bookingLink(d, "View or cancel your booking"),
@@ -229,7 +229,7 @@ export const TEMPLATES: Record<
       [
         {
           p: d.refundAmount
-            ? `The guest cancelled within 24 hours of booking, so a full refund of ${d.refundAmount} is being issued automatically. The dates are free again.`
+            ? `The guest cancelled within 24 hours of the booking being confirmed, so a full refund of ${d.refundAmount} is being issued automatically. The dates are free again.`
             : "The guest cancelled after the 24-hour free-cancellation period, so no refund was issued. The dates are free again.",
         },
         { list: stayLines(d) },

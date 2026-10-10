@@ -391,16 +391,19 @@ export const reservations = pgTable(
       withTimezone: true,
     }),
     /**
-     * When the guest submitted the booking (the start of the free
-     * cancellation window). Set once on the server; immutable (trigger).
+     * When the guest submitted the booking (dates first held). A record of
+     * the request only: it does NOT start the cancellation window. Set once
+     * on the server; immutable (trigger).
      */
     requestedAt: timestamp("requested_at", { withTimezone: true })
       .notNull()
       .defaultNow(),
     /**
      * Cancellations received strictly before this instant get a full refund
-     * (src/server/booking/cancellation-policy.ts). Immutable; null only for
-     * bookings made before the policy existed.
+     * (src/server/booking/cancellation-policy.ts). Under the current policy
+     * it is confirmed_at + 24 h, set in the same update that confirms the
+     * booking after verified payment. Null until then; once set it can
+     * never change (trigger).
      */
     freeCancellationUntil: timestamp("free_cancellation_until", {
       withTimezone: true,
@@ -413,6 +416,10 @@ export const reservations = pgTable(
     /** SHA-256 of the guest's booking-access token; the token is never stored. */
     accessTokenHash: text("access_token_hash").notNull(),
     stripeCustomerId: text("stripe_customer_id"),
+    /**
+     * Server time at which a verified payment first confirmed the booking.
+     * Set once; never reset by duplicate or late webhooks (trigger).
+     */
     confirmedAt: timestamp("confirmed_at", { withTimezone: true }),
     cancelledAt: timestamp("cancelled_at", { withTimezone: true }),
     /** Optimistic-concurrency counter, incremented on every state change. */
@@ -427,6 +434,10 @@ export const reservations = pgTable(
     check(
       "reservations_hold_has_expiry",
       sql`${t.status} NOT IN ('REQUESTED', 'APPROVED', 'PENDING_PAYMENT') OR ${t.holdExpiresAt} IS NOT NULL`,
+    ),
+    check(
+      "reservations_confirmation_clock",
+      sql`${t.cancellationPolicy} IS DISTINCT FROM 'FULL_REFUND_WITHIN_24H_OF_CONFIRMATION' OR ${t.freeCancellationUntil} IS NULL OR (${t.confirmedAt} IS NOT NULL AND ${t.freeCancellationUntil} = ${t.confirmedAt} + interval '24 hours')`,
     ),
     check(
       "reservations_approved_has_approver",

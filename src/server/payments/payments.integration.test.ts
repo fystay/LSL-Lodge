@@ -13,7 +13,11 @@ import {
   webhookEvents,
 } from "@/server/db/schema";
 import { createHold, expireLapsedHolds } from "@/server/booking/holds";
-import { guestCancel } from "@/server/booking/resolution";
+import {
+  confirmReviewedBooking,
+  guestCancel,
+} from "@/server/booking/resolution";
+import { auditLogs } from "@/server/db/schema";
 import { FakeGateway } from "../../../tests/support/fake-gateway";
 import {
   createBookableProperty,
@@ -34,7 +38,7 @@ const MIN = 60_000;
 const HOUR = 60 * MIN;
 const BASE = "http://localhost:3000";
 
-/** Unpaid holds last 35 minutes; this is safely past that. */
+/** Unpaid holds last 30 minutes; this is safely past that. */
 const LAPSED = 40 * MIN;
 
 /** A guest's instant booking, held for payment (no approval step). */
@@ -86,9 +90,11 @@ describe("startCheckout", () => {
     expect(params.reservationId).toBe(reservationId);
     expect(params.successUrl).toContain("{CHECKOUT_SESSION_ID}");
     // The 24-hour cancellation deadline is shown on Stripe's page.
+    // No deadline exists before payment is confirmed, so none is quoted.
     expect(params.submitMessage).toBe(
-      "Free cancellation until 1:00pm on Friday 9 October 2026 (UK time). After that, this booking is non-refundable.",
+      "The 24-hour free-cancellation period starts once your payment is confirmed. After that, the booking is non-refundable.",
     );
+    expect(params.submitMessage).not.toMatch(/\d:\d\d/);
     const r = await load(reservationId);
     expect(params.expiresAt.getTime()).toBeLessThanOrEqual(
       r.holdExpiresAt!.getTime(),
@@ -654,3 +660,202 @@ async function importBusy(
     contentHash: "h",
   });
 }
+
+describe("free-cancellation clock (starts at verified payment)", () => {
+  const stripe = new Stripe("sk_test_dummy_not_a_real_key");
+  const secret = "whsec_test_secret_for_clock_tests";
+  const completed = (session: ReturnType<FakeGateway["latest"]>) => {
+    const payload = JSON.stringify({
+      id: `evt_test_${randomUUID().replaceAll("-", "")}`,
+      object: "event",
+      type: "checkout.session.completed",
+      data: {
+        object: {
+          id: session.id,
+          object: "checkout.session",
+          status: session.status,
+          payment_status: session.paymentStatus,
+          amount_total: session.amountTotal,
+          currency: session.currency,
+          client_reference_id: session.clientReferenceId,
+          payment_intent: session.paymentIntentId,
+          metadata: session.metadata,
+          url: null,
+          expires_at: Math.floor(session.expiresAt.getTime() / 1000),
+        },
+      },
+    });
+    return verifyStripeWebhook(
+      stripe,
+      payload,
+      stripe.webhooks.generateTestHeaderString({ payload, secret }),
+      secret,
+    );
+  };
+  const clock = async (id: string) => {
+    const r = await load(id);
+    return {
+      requestedAt: r.requestedAt.toISOString(),
+      confirmedAt: r.confirmedAt?.toISOString() ?? null,
+      freeCancellationUntil: r.freeCancellationUntil?.toISOString() ?? null,
+    };
+  };
+  const plus = (ms: number) => new Date(NOW.getTime() + ms);
+
+  it("has no deadline while the guest is still paying", async () => {
+    const { reservationId } = await heldBooking();
+    await startCheckout(db, new FakeGateway(), {
+      reservationId,
+      baseUrl: BASE,
+      now: plus(5 * MIN),
+    });
+    expect(await clock(reservationId)).toEqual({
+      requestedAt: NOW.toISOString(),
+      confirmedAt: null,
+      freeCancellationUntil: null,
+    });
+  });
+
+  it("starts the 24 hours when the verified webhook confirms, not when the booking or Checkout began", async () => {
+    const { reservationId } = await heldBooking();
+    const gateway = new FakeGateway();
+    await startCheckout(db, gateway, {
+      reservationId,
+      baseUrl: BASE,
+      now: plus(5 * MIN),
+    });
+    const verifiedAt = plus(20 * MIN);
+    expect(
+      await processStripeEvent(
+        db,
+        completed(gateway.pay(gateway.latest().id)),
+        verifiedAt,
+      ),
+    ).toMatchObject({ outcome: "CONFIRMED" });
+    expect(await clock(reservationId)).toEqual({
+      requestedAt: NOW.toISOString(),
+      confirmedAt: verifiedAt.toISOString(),
+      freeCancellationUntil: plus(20 * MIN + 24 * HOUR).toISOString(),
+    });
+    const [entry] = await db
+      .select()
+      .from(auditLogs)
+      .where(eq(auditLogs.action, "reservation.confirmed"));
+    expect(entry.metadata).toMatchObject({
+      confirmedAt: verifiedAt.toISOString(),
+      freeCancellationUntil: plus(20 * MIN + 24 * HOUR).toISOString(),
+    });
+  });
+
+  it("is not reset by a duplicate, delayed or out-of-order webhook", async () => {
+    const { reservationId } = await heldBooking();
+    const gateway = new FakeGateway();
+    await startCheckout(db, gateway, {
+      reservationId,
+      baseUrl: BASE,
+      now: NOW,
+    });
+    const paid = gateway.pay(gateway.latest().id);
+    // The guest's return page verifies the session with Stripe first.
+    const returnedAt = plus(3 * MIN);
+    expect(await applyCheckoutSession(db, paid, returnedAt)).toBe("CONFIRMED");
+    const first = await clock(reservationId);
+    expect(first.freeCancellationUntil).toBe(
+      plus(3 * MIN + 24 * HOUR).toISOString(),
+    );
+    // The webhook arrives two hours late, then again (a retry), then an
+    // "expired" event out of order: none moves the deadline.
+    const event = completed(paid);
+    await processStripeEvent(db, event, plus(2 * HOUR));
+    await processStripeEvent(db, event, plus(3 * HOUR));
+    await processStripeEvent(
+      db,
+      completed({ ...paid, status: "expired" }),
+      plus(4 * HOUR),
+    );
+    expect(await applyCheckoutSession(db, paid, plus(5 * HOUR))).toBe(
+      "ALREADY_APPLIED",
+    );
+    expect(await clock(reservationId)).toEqual(first);
+  });
+
+  it("uses the delayed webhook's time when that is the first verification", async () => {
+    const { reservationId } = await heldBooking();
+    const gateway = new FakeGateway();
+    await startCheckout(db, gateway, {
+      reservationId,
+      baseUrl: BASE,
+      now: NOW,
+    });
+    // Paid at Stripe within the hold, but no return-page check and the
+    // webhook only reaches us 50 minutes later.
+    const lateArrival = plus(50 * MIN);
+    await processStripeEvent(
+      db,
+      completed(gateway.pay(gateway.latest().id)),
+      lateArrival,
+    );
+    // Nobody else had taken the dates, so it confirms on arrival, and the
+    // 24 hours run from then (the server's verification time).
+    expect(await clock(reservationId)).toMatchObject({
+      confirmedAt: lateArrival.toISOString(),
+      freeCancellationUntil: plus(50 * MIN + 24 * HOUR).toISOString(),
+    });
+  });
+
+  it("starts the 24 hours when the owner confirms a payment that needed review", async () => {
+    const { reservationId } = await heldBooking();
+    const gateway = new FakeGateway();
+    await startCheckout(db, gateway, {
+      reservationId,
+      baseUrl: BASE,
+      now: NOW,
+    });
+    await expireLapsedHolds(db, null, plus(LAPSED));
+    await processStripeEvent(
+      db,
+      completed(gateway.pay(gateway.latest().id)),
+      plus(LAPSED + MIN),
+    );
+    const r = await load(reservationId);
+    expect(r.status).toBe("REQUIRES_REVIEW");
+    expect([r.confirmedAt, r.freeCancellationUntil]).toEqual([null, null]);
+
+    const ownerConfirms = plus(3 * HOUR);
+    expect(
+      await confirmReviewedBooking(db, {
+        propertyId: r.propertyId,
+        reservationId,
+        actor: "owner@example.test",
+        now: ownerConfirms,
+      }),
+    ).toEqual({ ok: true });
+    expect(await clock(reservationId)).toMatchObject({
+      confirmedAt: ownerConfirms.toISOString(),
+      freeCancellationUntil: plus(3 * HOUR + 24 * HOUR).toISOString(),
+    });
+  });
+
+  it("keeps the original deadline if a confirmed booking is reviewed and confirmed again", async () => {
+    const { property, reservationId } = await heldBooking();
+    const gateway = new FakeGateway();
+    await startCheckout(db, gateway, {
+      reservationId,
+      baseUrl: BASE,
+      now: NOW,
+    });
+    await applyCheckoutSession(db, gateway.pay(gateway.latest().id), plus(MIN));
+    const first = await clock(reservationId);
+    await db
+      .update(reservations)
+      .set({ status: "REQUIRES_REVIEW", reviewReason: "CALENDAR_CONFLICT" })
+      .where(eq(reservations.id, reservationId));
+    await confirmReviewedBooking(db, {
+      propertyId: property.id,
+      reservationId,
+      actor: "owner@example.test",
+      now: plus(10 * HOUR),
+    });
+    expect(await clock(reservationId)).toEqual(first);
+  });
+});

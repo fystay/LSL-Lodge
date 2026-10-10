@@ -23,18 +23,16 @@ import {
   looksLikeGuestLink,
   verifyGuestLink,
 } from "./guest-link";
-import {
-  CANCELLATION_POLICY,
-  freeCancellationUntil,
-} from "./cancellation-policy";
+import { CANCELLATION_POLICY } from "./cancellation-policy";
 import { EXPIRING_STATUSES } from "./reservation-state";
 
 /**
- * How long the dates are held while the guest pays. Stripe Checkout
- * sessions must stay open at least 30 minutes, so the hold covers that with
- * a margin; a session never outlives its hold (src/server/payments/checkout.ts).
+ * How long the dates are held while the guest pays (the figure the existing
+ * booking pages state). Stripe Checkout sessions must stay open at least 30
+ * minutes, so starting Checkout extends the hold just enough to cover the
+ * session; a session never outlives its hold (src/server/payments/checkout.ts).
  */
-export const HOLD_MINUTES = 35;
+export const HOLD_MINUTES = 30;
 
 export interface HoldInput {
   propertyId: string;
@@ -56,7 +54,6 @@ export type HoldResult =
       accessToken: string;
       holdExpiresAt: Date;
       /** Full refund if cancelled strictly before this (24 h from now). */
-      freeCancellationUntil: Date;
       quote: Quote;
       replayed: boolean;
     }
@@ -165,7 +162,6 @@ export async function createHold(
 
       const accessToken = randomBytes(32).toString("base64url");
       const holdExpiresAt = new Date(now.getTime() + HOLD_MINUTES * 60_000);
-      const freeUntil = freeCancellationUntil(now);
       const [row] = await tx
         .insert(reservations)
         .values({
@@ -184,7 +180,7 @@ export async function createHold(
           quoteSnapshot: priced.quote,
           holdExpiresAt,
           requestedAt: now,
-          freeCancellationUntil: freeUntil,
+          // No deadline yet: the 24 hours start at verified payment.
           cancellationPolicy: CANCELLATION_POLICY.id,
           idempotencyKey: input.idempotencyKey,
           accessTokenHash: hashToken(accessToken),
@@ -210,13 +206,11 @@ export async function createHold(
           nights: priced.quote.nights,
           totalMinor: priced.quote.totalMinor,
           holdMinutes: HOLD_MINUTES,
-          freeCancellationUntil: freeUntil.toISOString(),
         },
       });
 
       return {
         ok: true,
-        freeCancellationUntil: freeUntil,
         reservationId: row.id,
         publicRef: row.publicRef,
         accessToken,
@@ -264,7 +258,6 @@ async function replayHold(
     .where(eq(reservations.id, existing.id));
   return {
     ok: true,
-    freeCancellationUntil: existing.freeCancellationUntil!,
     reservationId: existing.id,
     publicRef: existing.publicRef,
     accessToken,

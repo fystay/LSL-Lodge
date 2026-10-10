@@ -16,7 +16,11 @@ import {
 } from "@/server/notifications/outbox";
 import type { CheckoutSessionSnapshot, PaymentGateway } from "./gateway";
 import { queueChargeRefund } from "./refunds";
-import { formatDeadline } from "@/server/booking/cancellation-policy";
+import {
+  POLICY_BEFORE_PAYMENT,
+  confirmationColumns,
+  formatDeadline,
+} from "@/server/booking/cancellation-policy";
 
 /**
  * Payment lifecycle for an instant booking's hold (and, for older data, an
@@ -206,9 +210,11 @@ export async function startCheckout(
       successUrl: `${refPath}?payment=returned&session_id={CHECKOUT_SESSION_ID}`,
       cancelUrl: `${refPath}?payment=cancelled`,
       expiresAt: payment.checkoutExpiresAt!,
+      // Shown beside Stripe's pay button. The deadline only exists once the
+      // payment is confirmed, so none is quoted here.
       submitMessage: r.freeCancellationUntil
         ? `Free cancellation until ${formatDeadline(r.freeCancellationUntil, r.timeZone)} (UK time). After that, this booking is non-refundable.`
-        : undefined,
+        : POLICY_BEFORE_PAYMENT,
       idempotencyKey: payment.idempotencyKey,
     });
     await db
@@ -361,14 +367,26 @@ export async function applyCheckoutSession(
     const next = outstanding.length === 0 ? "CONFIRMED" : "PAYMENT_DUE";
     await tx
       .update(reservations)
-      .set({ status: next, confirmedAt: now, holdExpiresAt: null })
+      .set({ status: next, holdExpiresAt: null, ...confirmationColumns(now) })
+      .where(eq(reservations.id, r.id));
+    const [confirmed] = await tx
+      .select({
+        confirmedAt: reservations.confirmedAt,
+        freeCancellationUntil: reservations.freeCancellationUntil,
+      })
+      .from(reservations)
       .where(eq(reservations.id, r.id));
     await tx.insert(auditLogs).values({
       actorType: "WEBHOOK",
       action: "reservation.confirmed",
       targetType: "reservation",
       targetId: r.id,
-      metadata: { status: next },
+      metadata: {
+        status: next,
+        confirmedAt: confirmed.confirmedAt?.toISOString() ?? null,
+        freeCancellationUntil:
+          confirmed.freeCancellationUntil?.toISOString() ?? null,
+      },
     });
     await enqueueForReservation(tx, r.id, [
       "booking_confirmed",

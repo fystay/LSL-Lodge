@@ -64,6 +64,13 @@
       "when": 1791581810862,
       "tag": "0008_instant_booking",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1791613985441,
+      "tag": "0009_cancellation_clock_from_confirmation",
+      "breakpoints": true
     }
   ]
 }
