@@ -32,6 +32,9 @@ const sections = [
 export default function StayPage() {
   return (
     <GalleryProvider photos={allPhotos}>
+      {/* First on the page, so the bar sits under the site header from the
+          start and stays there; the introduction follows beneath it. */}
+      <SectionNav sections={sections} />
       <header className="border-b border-sage-300/60 bg-limestone/60">
         <Container className="grid gap-10 py-12 sm:py-16 lg:grid-cols-[1fr_1.3fr] lg:items-center">
           <div>
@@ -56,29 +59,31 @@ export default function StayPage() {
               </GalleryButton>
             </div>
           </div>
-          <div className="grid grid-cols-3 grid-rows-2 gap-3">
+          {/* The collage has one fixed shape and every photo fills its cell,
+              so the right-hand pair always meets the large photo's edges. */}
+          <div className="grid aspect-[3/2] grid-cols-3 grid-rows-2 gap-3">
             <Tile
               p={photo("living-room-media-wall")}
-              className="col-span-2 row-span-2"
-              aspect="aspect-[4/3] h-full"
+              className="col-span-2 row-span-2 h-full"
+              aspect="h-full w-full"
               sizes="(min-width: 1024px) 28rem, 66vw"
               priority
             />
             <Tile
               p={photo("lodge-across-water")}
-              aspect="aspect-square h-full"
+              className="h-full"
+              aspect="h-full w-full"
               sizes="(min-width: 1024px) 14rem, 33vw"
             />
             <Tile
               p={photo("main-bedroom")}
-              aspect="aspect-square h-full"
+              className="h-full"
+              aspect="h-full w-full"
               sizes="(min-width: 1024px) 14rem, 33vw"
             />
           </div>
         </Container>
       </header>
-
-      <SectionNav sections={sections} />
 
       <Space
         id="living"
@@ -103,7 +108,7 @@ export default function StayPage() {
       <section
         id="bedrooms"
         aria-labelledby="bedrooms-title"
-        className="scroll-mt-36 py-16 sm:py-20"
+        className="scroll-mt-[calc(8.3rem+1px-2.5rem)] py-16 sm:scroll-mt-[calc(8.3rem+1px-3.5rem)] sm:py-20"
       >
         <Container>
           <div className="reveal max-w-2xl">
@@ -170,7 +175,7 @@ export default function StayPage() {
       <section
         id="details"
         aria-labelledby="details-title"
-        className="scroll-mt-36 border-t border-sage-300/60 bg-limestone/60"
+        className="scroll-mt-[calc(8.3rem+1px-2rem)] border-t border-sage-300/60 bg-limestone/60 sm:scroll-mt-[calc(8.3rem+1px-2.5rem)]"
       >
         <Container className="grid gap-12 py-14 sm:py-16 lg:grid-cols-[1fr_1.4fr]">
           <h2 id="details-title" className="text-title">
@@ -261,7 +266,7 @@ function Space({
     <section
       id={id}
       aria-labelledby={`${id}-title`}
-      className={`scroll-mt-36 py-16 sm:py-20 ${tinted ? "bg-limestone/60" : ""}`}
+      className={`scroll-mt-[calc(8.3rem+1px-2.5rem)] py-16 sm:scroll-mt-[calc(8.3rem+1px-3.5rem)] sm:py-20 ${tinted ? "bg-limestone/60" : ""}`}
     >
       <Container className="grid gap-10 lg:grid-cols-[1fr_1.6fr] lg:items-start">
         <div className="reveal lg:sticky lg:top-40">
