@@ -39,12 +39,14 @@ test("guest pays in full in test mode and the booking confirms once", async ({
   await page.getByLabel("Lead guest name").fill("Sandbox Guest");
   await page.getByLabel("Email address").fill("sandbox-guest@example.test");
   await page.getByLabel(/I have read the/).check();
-  await page.getByRole("button", { name: "Continue to payment" }).click();
+  await page.getByRole("button", { name: "Hold these dates" }).click();
 
   // 3. Guest pays on Stripe's hosted page with the standard test card. The
-  // cancellation deadline is shown beside the pay button.
+  // page explains when the 24-hour cancellation window starts.
   await page.waitForURL(/checkout\.stripe\.com/);
-  await expect(page.getByText(/Free cancellation until/)).toBeVisible();
+  await expect(
+    page.getByText(/starts once your payment is confirmed/),
+  ).toBeVisible();
   await page.locator("#cardNumber").fill("4242 4242 4242 4242");
   await page.locator("#cardExpiry").fill("12 / 34");
   await page.locator("#cardCvc").fill("123");
@@ -59,6 +61,10 @@ test("guest pays in full in test mode and the booking confirms once", async ({
   await expect(page.getByRole("status").first()).toContainText("Confirmed", {
     timeout: 60_000,
   });
+  // Now the deadline exists: 24 hours after the verified payment.
+  await expect(
+    page.getByText(/You can cancel for a full refund until/),
+  ).toBeVisible();
 
   const sql = postgres(process.env.DATABASE_URL!, { max: 1 });
   try {

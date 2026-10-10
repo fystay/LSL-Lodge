@@ -29,7 +29,9 @@ What the tests prove, among other things:
   for every status pair; new bookings can only start as an unpaid hold; a
   lapsed or released hold can't be paid.
 - Cancellation policy: refundable 1 ms before the deadline, not exactly at
-  it or after; the 24 hours run from the booking, not the payment; the
+  it or after; the 24 hours run from verified payment (webhook or
+  server-side check), not the booking; duplicate, delayed and out-of-order
+  webhooks can't move the deadline; the
   deadline can't be changed in the database; a late cancellation needs an
   explicit acknowledgement; concurrent cancels refund once.
 - Payments (simulated Stripe): verified, idempotent confirmation; duplicate
@@ -62,7 +64,8 @@ What the tests prove, among other things:
 ### Owner decisions and accounts (docs/OWNER-DECISIONS.md)
 
 - [ ] Rates, fees, taxes, minimum stay, check-in/out times
-- [ ] Hold length while paying (default 35 minutes)
+- [ ] Hold length while paying (default 30 minutes)
+- [ ] Owner approval of the frontend differences in docs/FRONTEND-CHANGES.md
 - [ ] Owner-cancellation, no-show and amendment terms; booking terms;
       privacy notice; legal review (the 24-hour guest cancellation policy is
       confirmed and implemented)

@@ -13,12 +13,15 @@ docs/PLAN.md §7 for what is still open and
 checklist.
 
 How booking works (instant booking, no host approval): the guest picks
-available dates and enters their details → the dates are held for 35
+available dates and enters their details → the dates are held for 30
 minutes while they pay the full amount on Stripe-hosted Checkout → the
 booking confirms only when the server has verified the payment (signed
 webhook, or a server-side fetch of the session). Guests can cancel for a full
-refund strictly within 24 hours of booking; after that the booking is
-non-refundable (src/server/booking/cancellation-policy.ts). The owner blocks
+refund strictly within 24 hours of the booking being confirmed (the clock
+starts at verified payment); after that the booking is non-refundable
+(src/server/booking/cancellation-policy.ts). The production UI
+(lsllodge.vercel.app) is the reference for the public site; see
+docs/FRONTEND-CHANGES.md and docs/VISUAL-REGRESSION.md. The owner blocks
 and unblocks dates in `/admin/blocks`.
 
 - Project charter: [CLAUDE.md](CLAUDE.md)

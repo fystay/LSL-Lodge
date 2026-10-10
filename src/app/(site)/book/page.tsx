@@ -9,10 +9,7 @@ import { searchLimits } from "@/content/property";
 import { formatStayDate, todayInTimeZone } from "@/lib/dates";
 import { privateRouteMetadata } from "@/lib/metadata";
 import { validateStaySearch } from "@/lib/stay-search";
-import {
-  formatDeadline,
-  freeCancellationUntil,
-} from "@/server/booking/cancellation-policy";
+import { POLICY_BEFORE_PAYMENT } from "@/server/booking/cancellation-policy";
 import { checkStay, getBookingContext } from "@/server/booking/public";
 import { describeQuoteError } from "@/server/pricing/quote";
 import { GuestForm } from "./guest-form";
@@ -88,41 +85,12 @@ async function BookingStep({
         <h2 id="guest-title" className="text-2xl">
           Who&rsquo;s staying
         </h2>
-        <p className="mt-2 mb-6 text-ink-muted">
+        <p className="mt-2 text-ink-muted">
           We only ask for what we need to look after your stay.
         </p>
-        <div className="mb-6 rounded-soft border border-sage-300 bg-sage-100/60 p-4">
-          <h3 className="font-sans text-base font-semibold text-pine-900">
-            How booking works
-          </h3>
-          <ol className="mt-2 list-decimal space-y-1 pl-5">
-            <li>
-              When you continue, we hold these dates for you for a short time
-              and take you to our secure payment page (Stripe).
-            </li>
-            <li>You pay the full amount shown.</li>
-            <li>
-              Your booking is confirmed as soon as your payment has gone
-              through. There&rsquo;s no waiting for approval.
-            </li>
-          </ol>
-          <h3 className="mt-4 font-sans text-base font-semibold text-pine-900">
-            Cancellation
-          </h3>
-          <p className="mt-1">
-            You can cancel for a <strong>full refund within 24 hours</strong> of
-            booking. If you book now, that is until about{" "}
-            <strong>
-              {formatDeadline(
-                freeCancellationUntil(now),
-                ctx.property.timeZone,
-              )}
-            </strong>{" "}
-            (UK time); the exact time is shown on the payment page and in your
-            confirmation. After that, the booking is{" "}
-            <strong>non-refundable</strong>.
-          </p>
-        </div>
+        {/* Required by the owner's cancellation decision (no deadline exists
+            before payment, so none is shown). Same style as the line above. */}
+        <p className="mt-2 mb-6 text-ink-muted">{POLICY_BEFORE_PAYMENT}</p>
         <GuestForm
           stay={{
             checkIn: search.checkIn,

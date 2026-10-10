@@ -56,7 +56,7 @@
 
 - **Rate limiting** (Postgres-backed, `src/server/security/rate-limit.ts`):
   new bookings (holds) 5 per hour per client IP and 3 per day per guest
-  email (a hold blocks dates for 35 minutes, so this limits
+  email (a hold blocks dates for 30 minutes, so this limits
   calendar-hogging); payment
   starts 10 per hour per booking; admin sign-in 10 per 15 minutes per IP;
   enquiries 5 per hour per IP. Subjects are stored only as hashes and pruned
@@ -138,7 +138,8 @@ page (CLI only for now), and email notification of new sign-ins.
 
 - Refunds are created only on the server, in three cases: (1) a guest
   cancels strictly before their stored `free_cancellation_until`
-  (`requested_at` + 24 h, immutable in the database), which queues a full
+  (`confirmed_at` + 24 h, where `confirmed_at` is the server's time of
+  verified payment; both set once and then immutable in the database), which queues a full
   refund in the same transaction as the cancellation; (2) money that isn't
   owed for any stay (a duplicate payment, or a payment landing on a
   cancelled or re-sold booking) is refunded in full automatically; (3) the

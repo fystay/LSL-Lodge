@@ -57,8 +57,10 @@ REQUIRES_REVIEW)`. Overlapping active stays are impossible at the database
 - **Triggers**: legal status transitions only (mirrors
   `src/server/booking/reservation-state.ts`); website reservations can only be
   inserted as `PENDING_PAYMENT` (migration 0008); quote snapshot, total,
-  currency, `requested_at`, `free_cancellation_until` and
-  `cancellation_policy` are immutable; owner blocks and blocking
+  currency, `requested_at` and `cancellation_policy` are immutable;
+  `confirmed_at` and `free_cancellation_until` can be set once (from null)
+  and never changed (migration 0009), and a check constraint ties the
+  deadline to `confirmed_at + 24 h`; owner blocks and blocking
   reservations can't overlap in either direction
   (`reservations_owner_block_overlap`, `owner_blocks_booking_overlap`, each
   taking the property lock so a racing block and booking can't both
@@ -89,39 +91,43 @@ only a verified payment confirms a booking.
 
 ```
 guest details ──► PENDING_PAYMENT ──verified payment──► CONFIRMED ──guest cancels <24 h──► REFUND_PENDING ──► REFUNDED
- (requested_at,      │ (hold 35 min)                         ├──guest cancels ≥24 h (acknowledged)──► CANCELLED
-  deadline stored)   ├─guest releases──► CANCELLED           └──owner cancels──► CANCELLED (+ owner's refund decision)
+ (requested_at;      │ (hold 30 min)     (confirmed_at,      ├──guest cancels ≥24 h (acknowledged)──► CANCELLED
+  no deadline yet)   │                    deadline = +24 h)  └──owner cancels──► CANCELLED (+ owner's refund decision)
+                     ├─guest releases──► CANCELLED
                      └─not paid in time─► EXPIRED
 ```
 
 1. Guest searches. The server validates dates, occupancy, minimum stay and
    horizon, then prices the stay from versioned rate and fee rules. The
-   availability page shows the total, "Full payment due now" and the
-   cancellation policy.
-2. The details page explains the steps and shows the free-cancellation
-   deadline the guest would get if they booked now. The guest accepts the
-   terms (including "non-refundable after the first 24 hours").
+   availability page (production's design, unchanged) shows the total.
+2. The details page (production's design plus one sentence) says the
+   24-hour free-cancellation period starts once payment is confirmed. No
+   deadline is shown before payment because none exists yet.
 3. `createHold` (one transaction under the property lock) expires lapsed
    holds, re-checks every block source (bookings, live holds, owner blocks,
    imported Airbnb/Google periods, turnover buffer), prices the stay with
    the payment plan forced to FULL, and inserts a `PENDING_PAYMENT`
-   reservation with `requested_at = now`, `free_cancellation_until =
-requested_at + 24 h` and the policy ID, plus the schedule and an audit
-   entry. No email yet.
+   reservation held for 30 minutes, with `requested_at = now` and the policy
+   ID (`FULL_REFUND_WITHIN_24H_OF_CONFIRMATION`) but no deadline, plus the
+   schedule and an audit entry. No email yet.
 4. The same server action calls `startCheckout` and redirects to Stripe's
    hosted page (only `https://checkout.stripe.com/` URLs are followed).
    `startCheckout` re-checks state, hold expiry and imported calendars,
    records a `PENDING` payment for the scheduled amount and creates the
    session with a stable idempotency key, metadata and a message beside the
-   pay button stating the deadline. If Stripe isn't reachable the guest sees
+   pay button saying the 24 hours start once payment is confirmed. Stripe
+   needs sessions to last at least 30 minutes, so starting Checkout extends
+   the hold to cover the session. If Stripe isn't reachable the guest sees
    their held booking with a "Pay" button.
 5. **Only verified payment confirms.** `applyCheckoutSession` runs from the
    signature-verified webhook (event ID recorded in the same transaction)
    and from the return page's server-side session fetch. It requires the
    session to belong to this reservation and payment, be paid, match amount
    and currency, the reservation to still be a live hold, and no imported
-   calendar to overlap. Then `CONFIRMED` and the confirmation emails (with
-   the deadline) are queued.
+   calendar to overlap. Then, in one update, `CONFIRMED`, `confirmed_at =`
+   the server's verification time and `free_cancellation_until =
+confirmed_at + 24 h` (both only if still unset), and the confirmation
+   emails (with the deadline) are queued.
 6. **Anything unusual goes to the owner; money is never silently kept or
    lost.** Amount mismatch, payment after the hold lapsed (dates still free)
    or a new calendar clash → `REQUIRES_REVIEW`. Money that isn't owed for
@@ -133,17 +139,33 @@ requested_at + 24 h` and the policy ID, plus the schedule and an audit
 
 ### Cancellation policy (owner-confirmed)
 
-"Guests can cancel within 24 hours of submitting the booking for a full
-refund; after that the booking is non-refundable." Implemented in
+"Guests can cancel within 24 hours of their booking being paid and confirmed
+for a full refund; after that the booking is non-refundable." Implemented in
 `src/server/booking/cancellation-policy.ts` and `guestCancel`:
 
-- The window starts at `requested_at` (when the server accepted the
-  booking and held the dates), not at payment. `free_cancellation_until`
-  is stored when the booking is created and a trigger makes it immutable.
+- **The clock starts at verified payment.** `confirmed_at` is the server's
+  time when it first verified the payment and confirmed the booking (signed
+  webhook, the return page's server-side Stripe fetch, or the owner
+  confirming a booking that needed review). Not the booking submission
+  (`requested_at`), the hold, Checkout creation or anything from the
+  guest's device. `free_cancellation_until = confirmed_at + 24 h` is written
+  in the same update.
+- **Set once.** The confirming update uses `COALESCE`, so it only fills
+  these when empty; a trigger refuses any later change; a check constraint
+  enforces `free_cancellation_until = confirmed_at + 24 h`. Duplicate,
+  delayed or out-of-order webhooks and re-confirmation after a review can't
+  move the deadline (tested). A delayed webhook that is the first
+  verification starts the clock when it arrives.
+- **Before payment** there is no deadline; guests are told the 24 hours
+  start once payment is confirmed (details page, Stripe's page, booking
+  page). A paid-but-unverified hold has no deadline; cancelling it releases
+  the hold, and a payment that lands afterwards is refunded in full
+  automatically.
 - **Boundary:** a cancellation is refundable only if the server receives it
   **strictly before** `free_cancellation_until`. Exactly at the deadline,
   or later, it is non-refundable. Tests cover 1 ms before, exactly at and
-  1 ms after, plus a daylight-saving change. Guests see the deadline rounded
+  1 ms after the confirmation-based deadline, plus a daylight-saving
+  change. Guests see the deadline rounded
   down to the minute, in UK time, so what they see is never later than the
   real deadline.
 - Within the window: the booking is cancelled and a full refund of every

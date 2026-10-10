@@ -17,10 +17,10 @@ Facts gathered so far, with sources: [property-facts-and-policies.md](property-f
 - [x] **Payment model: full payment upfront.** Deposit plans are switched
       off.
 - [x] **Guest cancellation policy:** full refund if the guest cancels
-      within 24 hours of submitting the booking; non-refundable after that.
-      The 24 hours run from when the booking is submitted, the deadline is
-      fixed then, and a cancellation exactly at the deadline is not
-      refundable. Refunds within the window are sent automatically.
+      within 24 hours of the booking being paid and confirmed;
+      non-refundable after that. The 24 hours start when the server verifies
+      the payment (not when the guest starts booking), the deadline is fixed
+      then, and a cancellation exactly at the deadline is not refundable. Refunds within the window are sent automatically.
 
 ## Blocking test-mode payments and email (accounts)
 
@@ -39,6 +39,27 @@ Facts gathered so far, with sources: [property-facts-and-policies.md](property-f
       viewers). Each person sets up their own password and authenticator
       app from a one-time link; you'll need a phone authenticator app.
 
+## Waiting for your approval (UI)
+
+You asked that the production UI stay unchanged unless you authorise a
+change. These are listed in [FRONTEND-CHANGES.md](FRONTEND-CHANGES.md)
+with screenshots-based checks in [VISUAL-REGRESSION.md](VISUAL-REGRESSION.md):
+
+- [ ] **Booking details page (`/book`)**: one added sentence, "The 24-hour
+      free-cancellation period starts once your payment is confirmed. After
+      that, the booking is non-refundable." Not visible on production today
+      (online booking is off there).
+- [ ] **Booking status page (`/book/[ref]`)**: the page guests return to
+      after paying. Production has a preview version with no payment,
+      confirmation, deadline or cancellation. The branch's version adds
+      those, using the site's existing components. Approve it, or ask for a
+      smaller version.
+- [ ] **Cancellation policy page (`/cancellation-policy`)**: unchanged
+      (still the draft notice). Proposed text is in FRONTEND-CHANGES.md;
+      it will only be published with your approval.
+- [ ] **Owner dashboard (`/admin`)**: not guest-facing; changed by the
+      earlier admin-security and booking work (listed in the same file).
+
 ## Blocking real bookings (business rules)
 
 - [ ] **Rates**: seasonal nightly rates, weekend rates, cleaning fee, extra
@@ -46,8 +67,9 @@ Facts gathered so far, with sources: [property-facts-and-policies.md](property-f
 - [ ] **Tax treatment**: whether prices include VAT or any other tax (ask
       your accountant). Currency assumed GBP: confirm.
 - [ ] **Minimum stay**, check-in and check-out times, turnover buffer.
-- [ ] **Hold length**: dates are held for 35 minutes while the guest pays
-      (Stripe needs at least 30). Confirm, or choose another length.
+- [ ] **Hold length**: dates are held for 30 minutes while the guest pays
+      (extended just enough to cover Stripe's 30-minute minimum once they
+      open the payment page). Confirm, or choose another length.
 - [ ] **Rest of the cancellation terms**: what happens if _you_ cancel a
       guest's stay, no-shows, amendments (date changes), and whether Stripe's
       processing fee is absorbed on 24-hour refunds (today the guest gets

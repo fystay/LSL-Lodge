@@ -34,7 +34,7 @@ async function holdDates(page: Page, [checkIn, checkOut]: readonly string[]) {
   await page.getByLabel("Lead guest name").fill("Instant Guest");
   await page.getByLabel("Email address").fill("instant@example.test");
   await page.getByLabel(/I have read the/).check();
-  await page.getByRole("button", { name: "Continue to payment" }).click();
+  await page.getByRole("button", { name: "Hold these dates" }).click();
   await expect(page).toHaveURL(/\/book\/LL-[A-Z0-9]{6}$/);
   return page.url().split("/").at(-1)!;
 }

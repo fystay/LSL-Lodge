@@ -145,8 +145,7 @@ export function GuestForm({
             >
               cancellation policy
             </Link>
-            , and I understand the booking is non-refundable after the first 24
-            hours.
+            .
           </label>
         </div>
         {errors.acceptTerms && (
@@ -164,7 +163,7 @@ export function GuestForm({
         disabled={pending}
         className="min-h-12 w-full rounded-soft bg-pine-800 px-6 font-semibold text-ivory hover:bg-pine-700 disabled:opacity-70 sm:w-auto"
       >
-        {pending ? "Holding your dates…" : "Continue to payment"}
+        {pending ? "Holding your dates…" : "Hold these dates"}
       </button>
     </form>
   );

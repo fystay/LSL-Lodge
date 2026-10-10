@@ -48,9 +48,9 @@ test("guest sees an itemised price and payment schedule before committing", asyn
   await expect(breakdown).toContainText("Cleaning (placeholder)");
   await expect(breakdown).toContainText("£510");
   await expect(page.getByText(/Full payment\s+due now/)).toBeVisible();
-  // The cancellation policy is shown before committing.
+  // Production's wording, unchanged.
   await expect(
-    page.getByText(/full refund within 24 hours of making your booking/),
+    page.getByText(/holds these dates for you for\s+30 minutes/),
   ).toBeVisible();
 });
 
@@ -63,13 +63,17 @@ test("guest books instantly; the dates are held and unavailable to others", asyn
   await page.getByRole("link", { name: "Continue to book" }).click();
   await expect(page).toHaveURL(/\/book\?/);
 
-  await expect(page.getByText(/no waiting for approval/i)).toBeVisible();
-  // The deadline is shown before payment.
+  // Before payment no deadline exists yet: the page says when it starts and
+  // shows no time.
   await expect(
-    page.getByText(/If you book now, that is until about/),
+    page.getByText(
+      "The 24-hour free-cancellation period starts once your payment is confirmed.",
+      { exact: false },
+    ),
   ).toBeVisible();
+  await expect(page.getByText(/until \d{1,2}:\d\d/)).toHaveCount(0);
   // Server-side validation first.
-  await page.getByRole("button", { name: "Continue to payment" }).click();
+  await page.getByRole("button", { name: "Hold these dates" }).click();
   await expect(
     page.getByRole("alert").filter({ hasText: "Please check the following" }),
   ).toBeVisible();
@@ -77,7 +81,7 @@ test("guest books instantly; the dates are held and unavailable to others", asyn
   await page.getByLabel("Lead guest name").fill("Test Guest");
   await page.getByLabel("Email address").fill("guest@example.test");
   await page.getByLabel(/I have read the/).check();
-  await page.getByRole("button", { name: "Continue to payment" }).click();
+  await page.getByRole("button", { name: "Hold these dates" }).click();
 
   // Without Stripe keys (this preview) the guest lands on their booking page
   // instead of Stripe's; with keys they would go straight to Checkout.
@@ -91,8 +95,12 @@ test("guest books instantly; the dates are held and unavailable to others", asyn
   );
   await expect(page.getByRole("status").first()).toContainText("not booked");
   await expect(page.getByRole("status").first()).not.toContainText("Confirmed");
+  // Not paid, so no deadline yet.
   await expect(
     page.getByText(/You can cancel for a full refund until/),
+  ).toHaveCount(0);
+  await expect(
+    page.getByText(/starts once your payment is confirmed/).first(),
   ).toBeVisible();
   await expect(
     page.getByText("Online payment isn’t switched on in this preview"),

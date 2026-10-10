@@ -348,16 +348,24 @@ async function Detail({
             <dd>{r.source === "DIRECT" ? "Website" : "Entered by owner"}</dd>
             <dt className="font-semibold">Booked</dt>
             <dd>{when(r.requestedAt)}</dd>
-            {r.freeCancellationUntil && (
+            {r.freeCancellationUntil ? (
               <>
                 <dt className="font-semibold">Free cancellation</dt>
                 <dd>
-                  until {when(r.freeCancellationUntil)}
+                  until {when(r.freeCancellationUntil)}, 24 h after payment was
+                  confirmed at {when(r.confirmedAt)}
                   {refundEligible(r.freeCancellationUntil, ctx.now)
                     ? " (still open)"
                     : " (passed: non-refundable)"}
                 </dd>
               </>
+            ) : (
+              r.status === "PENDING_PAYMENT" && (
+                <>
+                  <dt className="font-semibold">Free cancellation</dt>
+                  <dd>starts once payment is confirmed (24 h from then)</dd>
+                </>
+              )
             )}
             {r.approvedAt && (
               <>

@@ -14,43 +14,19 @@ export default function CancellationPolicyPage() {
       <PageHeader eyebrow="Policies" title="Cancellation policy" />
       <Container className="py-14 sm:py-16">
         <div className="prose-lodge">
-          <h2>Free cancellation for 24 hours</h2>
-          <p>
-            You can cancel for a <strong>full refund</strong> within 24 hours of
-            making your booking. The 24 hours start when you submit your booking
-            (when we first hold your dates), not when your payment completes,
-            and they don&rsquo;t restart.
-          </p>
-          <p>
-            After that, your booking is <strong>non-refundable</strong>.
-          </p>
-          <h2>How it works</h2>
-          <ul>
-            <li>
-              The exact time your free cancellation ends is shown before you
-              pay, on the payment page and in your confirmation email.
-            </li>
-            <li>
-              To get a refund, your cancellation must reach us{" "}
-              <strong>before</strong> that time. A cancellation received at or
-              after it is non-refundable.
-            </li>
-            <li>
-              Cancel from your booking page (the link in your confirmation
-              email). You&rsquo;ll see whether a refund applies before you
-              confirm.
-            </li>
-            <li>
-              Refunds go back to the card you paid with. We&rsquo;ll email you
-              when our payment provider confirms the refund; banks usually take
-              5–10 working days to show it.
-            </li>
-          </ul>
-          <DraftNotice title="Still to be confirmed">
-            What happens if we ever need to cancel your stay, and how no-shows,
-            late arrivals and early departures are handled, are still being
-            finalised. This page is also awaiting legal review.
+          <DraftNotice title="Awaiting owner approval">
+            The cancellation and refund terms have not been set yet. No booking
+            can be made until the owner has approved this policy, and it will be
+            shown to you in full before you pay.
           </DraftNotice>
+          <h2>What this policy will cover</h2>
+          <ul>
+            <li>How much notice is needed for a full or partial refund.</li>
+            <li>What happens to a deposit, and to a balance already paid.</li>
+            <li>How to cancel, and how long refunds take to reach you.</li>
+            <li>What happens if we ever need to cancel your stay.</li>
+            <li>Arriving late, leaving early, and no-shows.</li>
+          </ul>
           <p>
             Your statutory rights are not affected. Questions?{" "}
             <Link href="/contact">Contact us</Link>.

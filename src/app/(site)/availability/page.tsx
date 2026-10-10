@@ -1,5 +1,4 @@
 import Link from "next/link";
-import { POLICY_SUMMARY } from "@/server/booking/cancellation-policy";
 import { connection } from "next/server";
 import { Suspense } from "react";
 import { BookingSearch } from "@/components/booking-search";
@@ -21,7 +20,6 @@ import { validateStaySearch } from "@/lib/stay-search";
 import {
   calendarStatuses,
   checkStay,
-  calendarSyncDelayed,
   getBookingContext,
   type BookingContext,
 } from "@/server/booking/public";
@@ -202,10 +200,7 @@ async function StayResult({
   today: IsoDate;
   now: Date;
 }) {
-  const [{ available, quote }, syncDelayed] = await Promise.all([
-    checkStay(ctx, search, today, now),
-    calendarSyncDelayed(ctx, now),
-  ]);
+  const { available, quote } = await checkStay(ctx, search, today, now);
   if (!available) {
     return (
       <div className="mt-5 max-w-2xl space-y-2">
@@ -245,19 +240,9 @@ async function StayResult({
       </div>
       <div className="rounded-soft bg-ivory p-5">
         <p className="text-sm text-ink-muted">
-          Nothing is reserved or charged yet. Next, you enter your details; we
-          then hold these dates while you pay in full on our secure payment
-          page. Your booking is confirmed once payment goes through.
+          Nothing is reserved yet. The next step holds these dates for you for
+          30 minutes while you complete your booking.
         </p>
-        <p className="mt-3 text-sm">
-          <strong>Cancellation:</strong> {POLICY_SUMMARY}
-        </p>
-        {syncDelayed && (
-          <p className="mt-3 text-sm text-notice-ink">
-            Our link with other booking calendars is running behind, so these
-            dates may not yet reflect a very recent booking made elsewhere.
-          </p>
-        )}
         <Link
           href={`/book?${query}`}
           className="mt-4 flex min-h-12 items-center justify-center rounded-soft bg-pine-800 px-6 font-semibold text-ivory hover:bg-pine-700"

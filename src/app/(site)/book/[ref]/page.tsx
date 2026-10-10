@@ -18,6 +18,7 @@ import {
 } from "@/server/booking/guest-status";
 import { getBookingContext } from "@/server/booking/public";
 import {
+  POLICY_BEFORE_PAYMENT,
   formatDeadline,
   refundEligible,
 } from "@/server/booking/cancellation-policy";
@@ -55,7 +56,7 @@ const CANCEL_NOTICES: Record<string, string> = {
   refunding:
     "Your booking is cancelled and a full refund has been started. Refunds usually reach your card within 5–10 working days; we’ll email you when the payment provider confirms it.",
   cancelled:
-    "Your booking is cancelled. As it was cancelled more than 24 hours after booking, no refund is due.",
+    "Your booking is cancelled. As it was cancelled more than 24 hours after your booking was confirmed, no refund is due.",
   "ack-required":
     "The 24-hour free cancellation period has ended, so your booking has NOT been cancelled. If you still want to cancel, please confirm below that you understand no refund will be made.",
   processing:
@@ -266,13 +267,17 @@ async function BookingStatus({
             </p>
           ))}
 
-        {freeUntilText && (booked || status === "HOLD_AWAITING_PAYMENT") && (
+        {(booked || status === "HOLD_AWAITING_PAYMENT") && (
           <div className="rounded-soft border border-sage-300 bg-sage-100/60 p-4">
             <h3 className="font-sans text-base font-semibold text-pine-900">
               Cancellation
             </h3>
             <p className="mt-1">
-              {freeNow ? (
+              {!freeUntilText ? (
+                // Not paid yet: the 24 hours haven't started, so no time is
+                // shown.
+                POLICY_BEFORE_PAYMENT
+              ) : freeNow ? (
                 <>
                   You can cancel for a <strong>full refund</strong> until{" "}
                   <strong>{freeUntilText}</strong> (UK time). After that, this
