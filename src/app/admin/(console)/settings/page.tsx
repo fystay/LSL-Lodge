@@ -8,7 +8,7 @@ import {
   primaryButton,
 } from "@/components/admin-ui";
 import { adminContext } from "@/server/admin/context";
-import { instantBookingApproved } from "@/server/booking/mode";
+import { POLICY_SUMMARY } from "@/server/booking/cancellation-policy";
 import { updateSettingsAction } from "../../actions";
 
 export const metadata = { title: "Settings" };
@@ -48,30 +48,23 @@ async function Settings({
         error={typeof error === "string" ? error : undefined}
       />
       <AdminSection id="booking-mode" title="How guests book">
-        <p>
-          Current mode:{" "}
-          <strong>
-            {p.bookingMode === "REQUEST"
-              ? "Booking requests with your approval"
-              : "Instant booking"}
-          </strong>
-          .
-        </p>
-        <ol className="mt-2 list-decimal space-y-1 pl-5">
+        <ol className="list-decimal space-y-1 pl-5">
           <li>
-            A guest sends a request. Nothing is charged; the dates are held.
+            A guest chooses available dates and enters their details. The dates
+            are held briefly while they pay.
           </li>
-          <li>You approve or decline within your response window.</li>
+          <li>They pay the full amount on Stripe&rsquo;s secure page.</li>
           <li>
-            An approved guest pays the full amount within the payment window.
+            The booking is confirmed automatically once Stripe&rsquo;s signed
+            notification verifies the payment. There is no approval step.
           </li>
-          <li>The booking is confirmed only when payment is verified.</li>
         </ol>
-        <p className="mt-3 text-sm text-ink-muted">
-          Instant booking (pay straight away, no approval) is built but{" "}
-          {instantBookingApproved()
-            ? "has been approved for this site."
-            : "switched off. It needs your sign-off of an instant-booking policy before it can be enabled."}
+        <p className="mt-3">
+          <strong>Cancellation policy:</strong> {POLICY_SUMMARY} Refunds within
+          the 24 hours are sent automatically.
+        </p>
+        <p className="mt-2 text-sm text-ink-muted">
+          To stop dates being booked, block them on the Blocked dates page.
         </p>
       </AdminSection>
       <AdminSection id="stay-rules" title="Stay rules">
@@ -147,36 +140,6 @@ async function Settings({
                   ? p.checkOutTime
                   : ""
               }
-              className={inputClass}
-            />
-          </Field>
-          <Field
-            label="Response window (hours)"
-            name="requestResponseHours"
-            hint="How long you have to approve or decline. Default 24; confirm your own."
-          >
-            <input
-              id="requestResponseHours"
-              name="requestResponseHours"
-              inputMode="numeric"
-              required
-              defaultValue={p.requestResponseHours}
-              aria-describedby="requestResponseHours-hint"
-              className={inputClass}
-            />
-          </Field>
-          <Field
-            label="Payment window (hours)"
-            name="paymentWindowHours"
-            hint="How long an approved guest has to pay. Default 24; confirm your own."
-          >
-            <input
-              id="paymentWindowHours"
-              name="paymentWindowHours"
-              inputMode="numeric"
-              required
-              defaultValue={p.paymentWindowHours}
-              aria-describedby="paymentWindowHours-hint"
               className={inputClass}
             />
           </Field>

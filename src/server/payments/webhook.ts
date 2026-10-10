@@ -2,13 +2,15 @@ import "server-only";
 import { and, eq, sql } from "drizzle-orm";
 import type Stripe from "stripe";
 import type { Database } from "@/server/db/client";
-import { webhookEvents } from "@/server/db/schema";
+import { auditLogs, webhookEvents } from "@/server/db/schema";
 import {
   applyCheckoutSession,
   markCheckoutFailed,
   type ApplyOutcome,
 } from "./checkout";
-import { snapshotFromStripe } from "./gateway";
+import { refundFromStripe, snapshotFromStripe } from "./gateway";
+import { applyRefundSnapshot } from "./refunds";
+import { STRIPE_CHECKOUT_EVENTS, STRIPE_REFUND_EVENTS } from "./stripe-config";
 
 /**
  * Processes a signature-verified Stripe event exactly once.
@@ -26,15 +28,12 @@ export type WebhookOutcome =
   | {
       handled: "applied";
       type: string;
-      outcome: ApplyOutcome | "FAILED_MARKED";
+      outcome:
+        ApplyOutcome | "FAILED_MARKED" | "REFUND_APPLIED" | "REFUND_UNKNOWN";
     };
 
-const CHECKOUT_EVENTS = new Set([
-  "checkout.session.completed",
-  "checkout.session.async_payment_succeeded",
-  "checkout.session.async_payment_failed",
-  "checkout.session.expired",
-]);
+const REFUND_EVENTS = new Set<string>(STRIPE_REFUND_EVENTS);
+const CHECKOUT_EVENTS = new Set<string>(STRIPE_CHECKOUT_EVENTS);
 
 export async function processStripeEvent(
   db: Database,
@@ -75,6 +74,19 @@ export async function processStripeEvent(
           })
           .where(eq(webhookEvents.id, row.id));
 
+      if (REFUND_EVENTS.has(event.type)) {
+        const applied = await applyRefundSnapshot(
+          tx,
+          refundFromStripe(event.data.object as Stripe.Refund),
+        );
+        await finish("PROCESSED");
+        return {
+          handled: "applied",
+          type: event.type,
+          outcome: applied ? "REFUND_APPLIED" : "REFUND_UNKNOWN",
+        } as const;
+      }
+
       if (!CHECKOUT_EVENTS.has(event.type)) {
         await finish("IGNORED");
         return { handled: "ignored", type: event.type } as const;
@@ -85,6 +97,20 @@ export async function processStripeEvent(
         event.type === "checkout.session.async_payment_failed"
           ? (await markCheckoutFailed(tx, session.id), "FAILED_MARKED" as const)
           : await applyCheckoutSession(tx, snapshotFromStripe(session), now);
+      if (outcome === "UNKNOWN_SESSION" && session.payment_status === "paid") {
+        // Money we can't tie to a booking: never drop it quietly.
+        await tx.insert(auditLogs).values({
+          actorType: "WEBHOOK",
+          action: "payment.unmatched_session",
+          targetType: "stripe_checkout_session",
+          targetId: session.id,
+          metadata: { eventId: event.id },
+        });
+        console.error("stripe.unmatched_paid_session", {
+          eventId: event.id,
+          sessionId: session.id,
+        });
+      }
       await finish("PROCESSED");
       return { handled: "applied", type: event.type, outcome } as const;
     });

@@ -10,26 +10,57 @@ Facts gathered so far, with sources: [property-facts-and-policies.md](property-f
 
 ## Already decided
 
-- [x] **Booking mode: host approval.** Guests send a request; you approve or
-      decline; nothing is charged before approval. Instant booking is built
-      but switched off.
-- [x] **Payment model: full payment**, collected after approval.
+- [x] **Booking mode: instant booking** (October 2026, replacing host
+      approval). Guests pay in full when they book; the booking confirms
+      once Stripe's payment is verified. You control availability by
+      blocking dates.
+- [x] **Payment model: full payment upfront.** Deposit plans are switched
+      off.
+- [x] **Guest cancellation policy:** full refund if the guest cancels
+      within 24 hours of the booking being paid and confirmed;
+      non-refundable after that. The 24 hours start when the server verifies
+      the payment (not when the guest starts booking), the deadline is fixed
+      then, and a cancellation exactly at the deadline is not refundable. Refunds within the window are sent automatically.
 
 ## Blocking test-mode payments and email (accounts)
 
-- [ ] **Supabase project for the Lodge.** The connected Supabase account has
-      two projects ("fystay-preview" and "fystay@hotmail.com's Project"), both
-      holding another application's tables and data. We did not touch them.
-      Please create a dedicated project (EU/UK region), or confirm one may be
-      used. Pricing tier and backups (PITR) to confirm.
-- [ ] **Stripe.** The connected Stripe login shows "FYStay" (live and test)
-      and "FYStay sandbox". Confirm which account the Lodge should use, then
-      put its **test** secret key and webhook signing secret in the hosting
-      secret manager. Live mode stays off until you approve it.
+- [ ] **A database for the Lodge's staging site.** Creating a Supabase
+      project was refused on 10 October 2026: your account is at the free
+      plan's limit of 2 active projects (both belong to another app and were
+      not touched). Choose one; options, costs and steps are in
+      [STAGING-SETUP.md](STAGING-SETUP.md) §1. Recommended: a free Supabase
+      account just for the Lodge. Alternatives: Neon's free plan through
+      Vercel (approve creating it), or Supabase Pro (from $25/month).
+- [ ] **Stripe.** "FYStay sandbox" belongs to another app (it has that app's
+      webhooks) and won't be used. Create a **dedicated, free Stripe
+      sandbox for the Lodge**; then `pnpm stripe:test-setup` creates its
+      webhook ([STAGING-SETUP.md](STAGING-SETUP.md) §2 and §5). Its **test**
+      keys and webhook secret go in Vercel's Preview variables for the
+      branch (never in chat or git). Live mode stays off until you approve
+      it.
+- [ ] **Staging on Vercel:** approve adding Preview variables for the
+      branch `claude/instant-booking`, and generate a Protection Bypass for
+      Automation secret (for the automated check and Stripe's webhooks).
+      Production is unaffected: bookings can't run there.
 - [ ] **Resend** (or another provider), a sending domain, and DNS access for
       SPF, DKIM and DMARC. Real guest emails stay off until you approve them.
-- [ ] **Admin users**: email addresses allowed into admin (MFA will be
-      required once managed login is added).
+- [ ] **Admin users**: who gets an account (owner, and any read-only
+      viewers). Each person sets up their own password and authenticator
+      app from a one-time link; you'll need a phone authenticator app.
+
+## UI decisions
+
+- [x] **Booking details page (`/book`)**: the one sentence about the 24-hour
+      period starting at payment (approved 10 October 2026).
+- [x] **Booking status page (`/book/[ref]`)**: production's page plus the
+      confirmed status, the cancellation deadline and "contact the owner to
+      cancel" (approved). No guest cancellation form; you record
+      cancellations in `/admin`.
+- [ ] **Cancellation policy page**: still the draft notice; proposed text
+      in [FRONTEND-CHANGES.md](FRONTEND-CHANGES.md).
+- [x] **"Paid" in the price box after payment** (approved and done).
+- [ ] **A guest self-cancel form** (optional, later): the backend supports
+      it; not added without your approval.
 
 ## Blocking real bookings (business rules)
 
@@ -38,19 +69,29 @@ Facts gathered so far, with sources: [property-facts-and-policies.md](property-f
 - [ ] **Tax treatment**: whether prices include VAT or any other tax (ask
       your accountant). Currency assumed GBP: confirm.
 - [ ] **Minimum stay**, check-in and check-out times, turnover buffer.
-- [ ] **Response window**: how long you have to answer a request (default
-      24 hours; dates are held meanwhile).
-- [ ] **Payment window**: how long an approved guest has to pay (default 24
-      hours).
-- [ ] **Cancellation, refund, no-show and amendment policy**, including
-      owner cancellations and refund timing. Airbnb's policy is not assumed.
-      Legal review recommended.
+- [ ] **Hold length**: dates are held for 30 minutes while the guest pays
+      (extended just enough to cover Stripe's 30-minute minimum once they
+      open the payment page). Confirm, or choose another length.
+- [ ] **Rest of the cancellation terms**: what happens if _you_ cancel a
+      guest's stay, no-shows, amendments (date changes), and whether Stripe's
+      processing fee is absorbed on 24-hour refunds (today the guest gets
+      everything back). Legal review recommended, including whether the
+      24-hour policy needs wording for UK consumer law.
+- [ ] **Stale Airbnb feed (default set, confirm):** while the Airbnb import
+      has had no successful sync for 60 minutes, the site takes no new
+      bookings and any payment that arrives waits for your review. Confirm,
+      or choose a different window.
 - [ ] **Booking terms** (legal review recommended).
 - [ ] **Guest data**: name and email by default; phone optional. Anything
       else (address, age of lead guest)?
-- [ ] **Late payments**: if a payment arrives after a booking lapsed, it is
-      flagged to you. Confirm your rule: honour the booking if the dates are
-      free, or always refund?
+- [ ] **Late payments**: if a payment arrives after a hold lapsed and the
+      dates are still free, it is flagged to you to honour or refund (if
+      the dates were re-booked, or the guest had cancelled, it is refunded
+      automatically). Confirm your rule.
+- [ ] **Email wording**: the draft messages (confirmed with the cancellation
+      deadline, cancelled, refund completed, payment failed and so on) need
+      your approval before real emails are switched on. Admin shows a
+      preview of each.
 
 ## Blocking calendars
 
@@ -59,15 +100,18 @@ Facts gathered so far, with sources: [property-facts-and-policies.md](property-f
 - [ ] Add the site's **export link** (shown in `/admin/calendars` once
       `CALENDAR_EXPORT_SECRET` is set) to Airbnb's "Import calendar".
 - [ ] **Is the iCal delay acceptable?** Airbnb updates its feeds on its own
-      schedule (see INTEGRATIONS.md). Your approval step is a safety net. If
+      schedule (see INTEGRATIONS.md). With instant booking there is no
+      approval step to catch a clash before payment. If
       the delay is not acceptable, choose a budget for a channel manager with
       an official Airbnb connection.
 - [ ] **Google Calendar**: which account and calendars to read busy times
       from; agree the site creates its own "bookings" calendar. Needs a
       Google Cloud project and OAuth consent screen. No calendar is written
       until you approve.
-- [ ] **Scheduler**: Vercel Pro (for 5–15 minute polling) or Supabase
-      `pg_cron` to call the job endpoints.
+- [ ] **Scheduler**: Supabase `pg_cron` (recommended once the project
+      exists) or Vercel Cron (plan limits apply). See SCHEDULER.md.
+- [ ] **Uptime monitor** account (e.g. Better Stack or UptimeRobot) to watch
+      the health endpoint and alert you if background work stops.
 
 ## Blocking launch
 

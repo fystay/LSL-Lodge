@@ -1,0 +1,100 @@
+{
+  "id": "evt_1UOuw0CyjWPP8AoI4I0Zw0e5",
+  "object": "event",
+  "api_version": "2026-08-26.dahlia",
+  "created": 1791618192,
+  "data": {
+    "object": {
+      "id": "cs_test_a1iCbLhPYF9UjTyxiiDNdu7kZ3RMZgUW2LRkqEgRjUigzJPrppPqEyKXNa",
+      "object": "checkout.session",
+      "adaptive_pricing": { "enabled": true },
+      "after_expiration": null,
+      "allow_promotion_codes": null,
+      "allowed_payment_method_types": ["card"],
+      "amount_subtotal": 51000,
+      "amount_total": 51000,
+      "automatic_tax": {
+        "enabled": false,
+        "liability": null,
+        "provider": null,
+        "status": null
+      },
+      "billing_address_collection": null,
+      "cancel_url": "http://localhost:3100/book/LL-SBXTST/checkout-cancelled?p=00000000-0000-4000-8000-000000000002",
+      "client_reference_id": "00000000-0000-4000-8000-000000000001",
+      "client_secret": null,
+      "consent": null,
+      "consent_collection": null,
+      "created": 1791618148,
+      "currency": "gbp",
+      "currency_conversion": null,
+      "custom_fields": [],
+      "custom_text": {
+        "after_submit": null,
+        "shipping_address": null,
+        "submit": {
+          "message": "The 24-hour free-cancellation period starts once your payment is confirmed. After that, the booking is non-refundable."
+        },
+        "terms_of_service_acceptance": null
+      },
+      "customer": null,
+      "customer_creation": "if_required",
+      "customer_details": {
+        "address": {
+          "city": null,
+          "country": "GB",
+          "line1": null,
+          "line2": null,
+          "postal_code": null,
+          "state": null
+        },
+        "business_name": null,
+        "email": "sandbox-guest@example.test",
+        "individual_name": null,
+        "name": "Sandbox Guest",
+        "phone": null,
+        "tax_exempt": "none",
+        "tax_ids": []
+      },
+      "customer_email": "sandbox-guest@example.test",
+      "discounts": [],
+      "expires_at": 1791704547,
+      "invoice": null,
+      "livemode": false,
+      "locale": null,
+      "metadata": {
+        "payment_id": "00000000-0000-4000-8000-000000000002",
+        "public_ref": "LL-SBXTST",
+        "reservation_id": "00000000-0000-4000-8000-000000000001"
+      },
+      "mode": "payment",
+      "payment_intent": "pi_3UOuvzCyjWPP8AoI0EaSx7jN",
+      "payment_link": null,
+      "payment_method_collection": "if_required",
+      "payment_method_options": {
+        "card": { "request_three_d_secure": "automatic" }
+      },
+      "payment_method_types": ["card"],
+      "payment_status": "paid",
+      "presentment_details": {
+        "presentment_amount": 70208,
+        "presentment_currency": "usd"
+      },
+      "status": "complete",
+      "submit_type": null,
+      "subscription": null,
+      "success_url": "http://localhost:3100/book/LL-SBXTST?payment=returned&session_id={CHECKOUT_SESSION_ID}",
+      "total_details": {
+        "amount_discount": 0,
+        "amount_shipping": 0,
+        "amount_tax": 0
+      },
+      "ui_mode": "hosted_page",
+      "url": null
+    }
+  },
+  "livemode": false,
+  "pending_webhooks": 1,
+  "request": { "id": null, "idempotency_key": null },
+  "type": "checkout.session.completed"
+}

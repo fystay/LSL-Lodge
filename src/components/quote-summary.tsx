@@ -10,17 +10,18 @@ const purposeLabel = {
 
 /**
  * Itemised price and payment schedule. Every mandatory charge is shown.
- * `dueLabels` overrides the due text per schedule sequence, e.g. "due once
- * the owner approves" for a request, where nothing is due on the quote date.
+ * `paidSequences` lists schedule items whose payment the server has
+ * verified; they read "paid" instead of a due date (owner-approved,
+ * October 2026). Without it the component renders exactly as before.
  */
 export function QuoteSummary({
   quote,
   today,
-  dueLabels,
+  paidSequences,
 }: {
   quote: Quote;
   today?: IsoDate;
-  dueLabels?: Partial<Record<number, string>>;
+  paidSequences?: readonly number[];
 }) {
   const money = (minor: number) => formatMoney(minor, quote.currency);
   return (
@@ -70,10 +71,11 @@ export function QuoteSummary({
               <span>
                 {purposeLabel[item.purpose]}{" "}
                 <span className="text-ink-muted">
-                  {dueLabels?.[item.sequence] ??
-                    (today && item.dueOn <= today
+                  {paidSequences?.includes(item.sequence)
+                    ? "paid"
+                    : today && item.dueOn <= today
                       ? "due now"
-                      : `due by ${formatStayDate(item.dueOn as IsoDate)}`)}
+                      : `due by ${formatStayDate(item.dueOn as IsoDate)}`}
                 </span>
               </span>
               <span className="tabular-nums">{money(item.amountMinor)}</span>

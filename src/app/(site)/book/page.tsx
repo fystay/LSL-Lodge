@@ -9,7 +9,7 @@ import { searchLimits } from "@/content/property";
 import { formatStayDate, todayInTimeZone } from "@/lib/dates";
 import { privateRouteMetadata } from "@/lib/metadata";
 import { validateStaySearch } from "@/lib/stay-search";
-import { effectiveBookingMode } from "@/server/booking/mode";
+import { POLICY_BEFORE_PAYMENT } from "@/server/booking/cancellation-policy";
 import { checkStay, getBookingContext } from "@/server/booking/public";
 import { describeQuoteError } from "@/server/pricing/quote";
 import { GuestForm } from "./guest-form";
@@ -42,8 +42,6 @@ async function BookingStep({
   await connection();
   const ctx = await getBookingContext();
   if (!ctx) notFound();
-  const mode = effectiveBookingMode(ctx.property.bookingMode);
-  if (!mode) notFound();
 
   const now = new Date();
   const today = todayInTimeZone(ctx.property.timeZone, now);
@@ -87,33 +85,13 @@ async function BookingStep({
         <h2 id="guest-title" className="text-2xl">
           Who&rsquo;s staying
         </h2>
-        <p className="mt-2 mb-6 text-ink-muted">
+        <p className="mt-2 text-ink-muted">
           We only ask for what we need to look after your stay.
         </p>
-        {mode === "REQUEST" && (
-          <div className="mb-6 rounded-soft border border-sage-300 bg-sage-100/60 p-4">
-            <h3 className="font-sans text-base font-semibold text-pine-900">
-              How booking works
-            </h3>
-            <ol className="mt-2 list-decimal space-y-1 pl-5">
-              <li>
-                You send a booking request. <strong>Nothing is charged.</strong>
-              </li>
-              <li>
-                The owner replies within{" "}
-                {hours(ctx.property.requestResponseHours)}. Your dates are held
-                for you until then.
-              </li>
-              <li>
-                If approved, we email you a secure link to pay the full amount
-                within {hours(ctx.property.paymentWindowHours)}.
-              </li>
-              <li>Your booking is confirmed once payment has gone through.</li>
-            </ol>
-          </div>
-        )}
+        {/* Required by the owner's cancellation decision (no deadline exists
+            before payment, so none is shown). Same style as the line above. */}
+        <p className="mt-2 mb-6 text-ink-muted">{POLICY_BEFORE_PAYMENT}</p>
         <GuestForm
-          mode={mode}
           stay={{
             checkIn: search.checkIn,
             checkOut: search.checkOut,
@@ -134,18 +112,8 @@ async function BookingStep({
           {search.nights} nights · {search.guests}{" "}
           {search.guests === 1 ? "guest" : "guests"}
         </p>
-        <QuoteSummary
-          quote={quote.quote}
-          today={today}
-          dueLabels={
-            mode === "REQUEST"
-              ? { 1: "due once the owner approves" }
-              : undefined
-          }
-        />
+        <QuoteSummary quote={quote.quote} today={today} />
       </aside>
     </div>
   );
 }
-
-const hours = (n: number) => (n === 1 ? "1 hour" : `${n} hours`);

@@ -21,7 +21,12 @@ function subscribeReducedMotion(callback: () => void) {
  * prefers-reduced-motion; each slide has a labelled button; only the active
  * image is exposed to assistive technology.
  */
-export function HeroCarousel({ slides }: { slides: Photo[] }) {
+export function HeroCarousel({
+  slides,
+}: {
+  /** label: a short room or area name shown in the corner pill. */
+  slides: (Photo & { label: string })[];
+}) {
   const [active, setActive] = useState(0);
   const [paused, setPaused] = useState(false);
   const [hovering, setHovering] = useState(false);
@@ -96,13 +101,20 @@ export function HeroCarousel({ slides }: { slides: Photo[] }) {
         ))}
       </div>
 
+      {/* Room label pill. On desktop the photo's left edge fades into the
+          page, so the pill starts where the image is fully opaque. */}
       <p
-        className="absolute top-4 right-4 hidden max-w-[70%] truncate rounded-full bg-pine-950/55 px-3 py-1.5 text-xs font-semibold tracking-wide text-ivory backdrop-blur sm:block"
+        className="absolute top-5 left-5 flex items-center gap-1.5 rounded-full border border-ivory/25 bg-[rgba(38,68,59,0.65)] px-2.5 py-1.5 text-[0.625rem] leading-none font-medium tracking-[0.2em] text-ivory uppercase backdrop-blur-sm sm:top-6 sm:left-6 sm:gap-2.5 sm:px-3.5 sm:py-2 sm:text-[0.6875rem] sm:tracking-[0.24em] lg:left-[calc(38%+1.5rem)]"
         aria-live="polite"
       >
-        {slides[active]?.caption}
+        <span aria-hidden="true" className="h-px w-2 bg-ivory/60 sm:w-3.5" />
+        <span key={active} className="label-in">
+          <span className="sr-only">{slides[active]?.caption}</span>
+          <span aria-hidden="true">{slides[active]?.label}</span>
+        </span>
+        <span aria-hidden="true" className="h-px w-2 bg-ivory/60 sm:w-3.5" />
       </p>
-      <div className="absolute top-3 right-3 flex items-center justify-end gap-3 sm:top-14 sm:right-4">
+      <div className="absolute top-3 right-3 flex items-center justify-end gap-3 sm:top-5 sm:right-4">
         <div className="flex shrink-0 items-center gap-1 rounded-full bg-pine-950/55 p-1 backdrop-blur">
           {slides.map((slide, i) => (
             <button
@@ -111,7 +123,7 @@ export function HeroCarousel({ slides }: { slides: Photo[] }) {
               onClick={() => setActive(i)}
               aria-label={`Show photo ${i + 1} of ${slides.length}: ${slide.caption}`}
               aria-current={i === active ? "true" : undefined}
-              className="flex size-8 items-center justify-center rounded-full"
+              className="flex size-8 items-center justify-center rounded-full max-[400px]:w-7"
             >
               <span
                 className={`block h-1.5 rounded-full bg-ivory transition-all duration-500 ${
@@ -125,7 +137,7 @@ export function HeroCarousel({ slides }: { slides: Photo[] }) {
               type="button"
               onClick={() => setPaused((p) => !p)}
               aria-label={paused ? "Play slideshow" : "Pause slideshow"}
-              className="flex size-8 items-center justify-center rounded-full text-ivory"
+              className="flex size-8 items-center justify-center rounded-full text-ivory max-[400px]:w-7"
             >
               <svg
                 aria-hidden="true"

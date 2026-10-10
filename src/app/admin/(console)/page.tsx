@@ -12,7 +12,7 @@ import { adminContext } from "@/server/admin/context";
 import { isStale } from "@/server/calendar/sync";
 import {
   calendarSources,
-  pendingRequests,
+  awaitingPayment,
   recentAudit,
   reviewQueue,
   upcomingStays,
@@ -45,7 +45,7 @@ async function Overview({
       </div>
     );
   const [requests, review, stays, sources, audit] = await Promise.all([
-    pendingRequests(ctx.db, ctx.property.id),
+    awaitingPayment(ctx.db, ctx.property.id),
     reviewQueue(ctx.db, ctx.property.id),
     upcomingStays(ctx.db, ctx.property.id, ctx.today),
     calendarSources(ctx.db, ctx.property.id),
@@ -62,7 +62,23 @@ async function Overview({
 
   return (
     <div className="mt-6 space-y-6">
-      <FormStatus error={typeof error === "string" ? error : undefined} />
+      <FormStatus
+        error={
+          error === "forbidden"
+            ? "Your account has read-only access, so that change wasn’t made."
+            : typeof error === "string"
+              ? error
+              : undefined
+        }
+      />
+      {ctx.admin.role === "VIEWER" && (
+        <p
+          role="status"
+          className="rounded-soft border border-sage-300 bg-sage-100 p-3"
+        >
+          You have read-only access. Changes can only be made by the owner.
+        </p>
+      )}
       <p>
         Signed in as <strong>{ctx.admin.email}</strong>. Online bookings are{" "}
         <strong>
@@ -71,9 +87,14 @@ async function Overview({
         for this property.
       </p>
 
-      <AdminSection id="requests" title="Requests awaiting your decision">
+      <AdminSection id="in-progress" title="Bookings in progress">
+        <p className="mb-2 text-sm text-ink-muted">
+          Guests who are paying now. Their dates are held until the time shown;
+          nothing is needed from you. A booking confirms automatically once
+          Stripe verifies payment.
+        </p>
         {requests.length === 0 ? (
-          <p>No requests waiting.</p>
+          <p>None right now.</p>
         ) : (
           <ul className="divide-y divide-sage-300/70">
             {requests.map((q) => (
@@ -96,7 +117,7 @@ async function Overview({
                   {formatMoney(q.totalMinor, q.currency)}
                 </span>
                 <span>
-                  Respond by <strong>{deadline(q.holdExpiresAt)}</strong>
+                  Held until <strong>{deadline(q.holdExpiresAt)}</strong>
                 </span>
               </li>
             ))}
@@ -121,7 +142,11 @@ async function Overview({
                 </span>
                 <span>{statusLabel(q.status)}</span>
                 <span className="font-semibold text-danger">
-                  {(q.reviewReason ?? "").replaceAll("_", " ").toLowerCase()}
+                  {q.reviewReason
+                    ? q.reviewReason.replaceAll("_", " ").toLowerCase()
+                    : q.cancellationRequestedAt
+                      ? "guest asked to cancel"
+                      : ""}
                 </span>
               </li>
             ))}

@@ -12,7 +12,12 @@ import {
 import { parseIsoDate as d } from "@/lib/dates";
 import { notificationJobs } from "@/server/db/schema";
 import { createHold } from "@/server/booking/holds";
-import { approveRequest } from "@/server/booking/requests";
+import { guestCancel } from "@/server/booking/resolution";
+import {
+  applyCheckoutSession,
+  startCheckout,
+} from "@/server/payments/checkout";
+import { FakeGateway } from "../../../tests/support/fake-gateway";
 import {
   createBookableProperty,
   resetTables,
@@ -51,6 +56,7 @@ class MemorySender implements EmailSender {
   }
 }
 
+/** A paid, confirmed booking: queues the guest and owner confirmations. */
 async function request() {
   const property = await createBookableProperty(db);
   const result = await createHold(db, {
@@ -62,7 +68,14 @@ async function request() {
     idempotencyKey: randomUUID(),
     now: NOW,
   });
-  if (!result.ok) throw new Error("expected request");
+  if (!result.ok) throw new Error("expected hold");
+  const gateway = new FakeGateway();
+  await startCheckout(db, gateway, {
+    reservationId: result.reservationId,
+    baseUrl: "http://localhost:3000",
+    now: NOW,
+  });
+  await applyCheckoutSession(db, gateway.pay(gateway.latest().id), NOW);
   return { property, reservationId: result.reservationId };
 }
 
@@ -82,9 +95,11 @@ describe("dispatchNotifications", () => {
       "owner@example.test",
     ]);
     const guest = sender.sent.find((m) => m.to === "guest@example.test")!;
-    expect(guest.subject).toMatch(/received your booking request/);
+    expect(guest.subject).toMatch(/confirmed/i);
     expect(guest.text).toMatch(/\/book\/LL-[A-Z0-9]{6}\/access\?t=g1\./);
-    expect(guest.idempotencyKey).toMatch(/^notification:request_received:/);
+    // The free-cancellation deadline, 24 h after booking, in UK time.
+    expect(guest.text).toContain("1:00pm on Friday 9 October 2026");
+    expect(guest.idempotencyKey).toMatch(/^notification:booking_confirmed:/);
 
     // A second run finds nothing to do.
     expect(
@@ -112,21 +127,25 @@ describe("dispatchNotifications", () => {
 
   it("cancels a message that no longer matches the booking", async () => {
     const { property, reservationId } = await request();
-    await approveRequest(db, {
+    await guestCancel(db, {
       propertyId: property.id,
       reservationId,
-      actor: "owner@example.test",
-      now: NOW,
+      receivedAt: new Date(NOW.getTime() + 60_000),
     });
-    // "Request received" is now stale; "approved" is current.
+    // "Booking confirmed" is now stale; the cancellation messages are current.
     const sender = new MemorySender();
     const result = await dispatchNotifications(db, sender, { now: sendAt() });
-    expect(result).toMatchObject({ cancelled: 1, sent: 2 });
+    expect(result).toMatchObject({ cancelled: 1, sent: 3 });
     const byTemplate = Object.fromEntries(
       (await jobs()).map((j) => [j.template, [j.status, j.lastErrorCode]]),
     );
-    expect(byTemplate.request_received).toEqual(["CANCELLED", "STALE"]);
-    expect(byTemplate.request_approved[0]).toBe("SENT");
+    expect(byTemplate.booking_confirmed).toEqual(["CANCELLED", "STALE"]);
+    expect(byTemplate.guest_cancellation_confirmed[0]).toBe("SENT");
+    const cancelled = sender.sent.find((m) =>
+      m.idempotencyKey.includes("guest_cancellation_confirmed"),
+    )!;
+    expect(cancelled.text).toContain("full refund of £300 ");
+    expect(cancelled.text).toMatch(/being processed/);
   });
 
   it("retries transient failures with backoff, then gives up", async () => {
@@ -143,6 +162,20 @@ describe("dispatchNotifications", () => {
     expect(rows.every((j) => j.status === "FAILED")).toBe(true);
     expect(rows.every((j) => j.attempts === MAX_ATTEMPTS)).toBe(true);
     expect(rows[0].lastErrorCode).toBe("HTTP_503");
+  });
+
+  it("fails (not cancels) owner alerts when no owner address is set", async () => {
+    vi.stubEnv("OWNER_NOTIFICATION_EMAIL", "");
+    await request();
+    const result = await dispatchNotifications(db, new MemorySender(), {
+      now: sendAt(),
+    });
+    expect(result).toMatchObject({ sent: 1, failed: 1 });
+    const owner = (await jobs()).find((j) => j.recipientKind === "OWNER")!;
+    expect([owner.status, owner.lastErrorCode]).toEqual([
+      "FAILED",
+      "NO_RECIPIENT",
+    ]);
   });
 
   it("does not retry a permanent failure", async () => {

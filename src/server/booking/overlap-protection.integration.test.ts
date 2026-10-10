@@ -1,6 +1,6 @@
 import { eq, sql } from "drizzle-orm";
 import { afterAll, beforeEach, describe, expect, it } from "vitest";
-import { reservations } from "@/server/db/schema";
+import { ownerBlocks, reservations } from "@/server/db/schema";
 import {
   createProperty,
   holdValues,
@@ -150,7 +150,7 @@ describe("reservation status rules in the database", () => {
     expect(pgErrorCode(error)).toBe(CHECK_VIOLATION);
   });
 
-  it("only lets website reservations start as a request or an instant hold", async () => {
+  it("only lets website reservations start as an unpaid hold", async () => {
     const property = await createProperty(db);
     let day = 1;
     for (const status of RESERVATION_STATUSES) {
@@ -170,46 +170,12 @@ describe("reservation status rules in the database", () => {
           expect(pgErrorCode(e)).toBe(CHECK_VIOLATION);
           return "rejected";
         });
+      // No more booking requests: REQUESTED is refused like CONFIRMED.
       expect({ status, outcome }).toEqual({
         status,
-        outcome:
-          status === "REQUESTED" || status === "PENDING_PAYMENT"
-            ? "allowed"
-            : "rejected",
+        outcome: status === "PENDING_PAYMENT" ? "allowed" : "rejected",
       });
     }
-  });
-
-  it("requires an approval time on an approved request", async () => {
-    const property = await createProperty(db);
-    const [row] = await db
-      .insert(reservations)
-      .values(
-        holdValues(property.id, "2026-09-01", "2026-09-03", {
-          status: "REQUESTED",
-        }),
-      )
-      .returning();
-    const error = await db
-      .update(reservations)
-      .set({ status: "APPROVED" })
-      .where(eq(reservations.id, row.id))
-      .catch((e: unknown) => e);
-    expect(pgErrorCode(error)).toBe(CHECK_VIOLATION);
-  });
-
-  it("blocks overlapping requests just like bookings", async () => {
-    const property = await createProperty(db);
-    await db.insert(reservations).values(
-      holdValues(property.id, "2026-09-01", "2026-09-05", {
-        status: "REQUESTED",
-      }),
-    );
-    const error = await db
-      .insert(reservations)
-      .values(holdValues(property.id, "2026-09-04", "2026-09-06"))
-      .catch((e: unknown) => e);
-    expect(pgErrorCode(error)).toBe(EXCLUSION_VIOLATION);
   });
 
   it("requires an expiry on every hold", async () => {
@@ -309,3 +275,115 @@ async function forceStatus(id: string, status: ReservationStatus) {
     );
   });
 }
+
+describe("owner blocks versus bookings, in the database", () => {
+  const block = (propertyId: string, startsOn: string, endsOn: string) => ({
+    propertyId,
+    startsOn,
+    endsOn,
+    reason: "Test",
+    createdBy: "owner@example.test",
+  });
+
+  it("refuses a booking or hold on blocked dates", async () => {
+    const property = await createProperty(db);
+    await db
+      .insert(ownerBlocks)
+      .values(block(property.id, "2026-09-01", "2026-09-05"));
+    const error = await db
+      .insert(reservations)
+      .values(holdValues(property.id, "2026-09-04", "2026-09-06"))
+      .catch((e: unknown) => e);
+    expect(pgErrorCode(error)).toBe(EXCLUSION_VIOLATION);
+    // The night the block ends is free (check-out exclusive).
+    await db
+      .insert(reservations)
+      .values(holdValues(property.id, "2026-09-05", "2026-09-07"));
+  });
+
+  it("refuses a block over a confirmed booking or a live hold", async () => {
+    const property = await createProperty(db);
+    await db
+      .insert(reservations)
+      .values(holdValues(property.id, "2026-09-01", "2026-09-05"));
+    const error = await db
+      .insert(ownerBlocks)
+      .values(block(property.id, "2026-09-03", "2026-09-08"))
+      .catch((e: unknown) => e);
+    expect(pgErrorCode(error)).toBe(EXCLUSION_VIOLATION);
+  });
+
+  it("refuses moving a block onto a booking, and un-removing one there", async () => {
+    const property = await createProperty(db);
+    const [b] = await db
+      .insert(ownerBlocks)
+      .values(block(property.id, "2026-09-10", "2026-09-12"))
+      .returning();
+    await db
+      .update(ownerBlocks)
+      .set({ removedAt: new Date() })
+      .where(eq(ownerBlocks.id, b.id));
+    await db
+      .insert(reservations)
+      .values(holdValues(property.id, "2026-09-01", "2026-09-05"));
+    const moved = await db
+      .update(ownerBlocks)
+      .set({ removedAt: null, startsOn: "2026-09-02", endsOn: "2026-09-04" })
+      .where(eq(ownerBlocks.id, b.id))
+      .catch((e: unknown) => e);
+    expect(pgErrorCode(moved)).toBe(EXCLUSION_VIOLATION);
+  });
+
+  it("ignores a hold that has lapsed and bookings that are no longer active", async () => {
+    const property = await createProperty(db);
+    await db.insert(reservations).values(
+      holdValues(property.id, "2026-09-01", "2026-09-05", {
+        holdExpiresAt: new Date(Date.now() - 60_000),
+      }),
+    );
+    await db
+      .insert(ownerBlocks)
+      .values(block(property.id, "2026-09-01", "2026-09-05"));
+  });
+
+  it("lets only one of a racing block and booking for the same dates win", async () => {
+    for (let round = 0; round < 5; round++) {
+      const property = await createProperty(db);
+      const results = await Promise.allSettled([
+        db
+          .insert(ownerBlocks)
+          .values(block(property.id, "2026-10-01", "2026-10-04")),
+        db
+          .insert(reservations)
+          .values(holdValues(property.id, "2026-10-02", "2026-10-05")),
+        db
+          .insert(ownerBlocks)
+          .values(block(property.id, "2026-10-03", "2026-10-06")),
+        db
+          .insert(reservations)
+          .values(holdValues(property.id, "2026-10-01", "2026-10-03")),
+      ]);
+      const [blocks, bookings] = await Promise.all([
+        db
+          .select()
+          .from(ownerBlocks)
+          .where(eq(ownerBlocks.propertyId, property.id)),
+        db
+          .select()
+          .from(reservations)
+          .where(eq(reservations.propertyId, property.id)),
+      ]);
+      // Blocks may overlap each other, bookings may not overlap anything.
+      expect(bookings.length).toBeLessThanOrEqual(1);
+      for (const r of bookings)
+        for (const b of blocks)
+          expect(
+            r.checkIn < b.endsOn && b.startsOn < r.checkOut,
+            `booking ${r.checkIn}–${r.checkOut} vs block ${b.startsOn}–${b.endsOn}`,
+          ).toBe(false);
+      for (const r of results)
+        if (r.status === "rejected")
+          expect(pgErrorCode(r.reason)).toBe(EXCLUSION_VIOLATION);
+    }
+  });
+});

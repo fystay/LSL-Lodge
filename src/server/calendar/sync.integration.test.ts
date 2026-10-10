@@ -82,6 +82,13 @@ async function setup() {
   return { property, sourceId: added.id };
 }
 
+/** Marks a source as freshly synced, so the stale-calendar stop allows bookings. */
+const markFresh = (sourceId: string, at = new Date()) =>
+  db
+    .update(externalCalendarSources)
+    .set({ lastSuccessAt: at, syncStatus: "OK" })
+    .where(eq(externalCalendarSources.id, sourceId));
+
 const periods = (sourceId: string) =>
   db
     .select()
@@ -258,8 +265,9 @@ describe("syncIcalSource", () => {
     expect((await source(sourceId)).lastErrorCode).toBeNull();
   });
 
-  it("flags a clash with a website request without changing either side", async () => {
+  it("flags a clash with a website booking without changing either side", async () => {
     const { property, sourceId } = await setup();
+    await markFresh(sourceId);
     const req = await createHold(db, {
       propertyId: property.id,
       checkIn: d("2027-03-01"),
@@ -269,7 +277,7 @@ describe("syncIcalSource", () => {
       idempotencyKey: randomUUID(),
       now: new Date(),
     });
-    if (!req.ok) throw new Error("expected request");
+    if (!req.ok) throw new Error("expected hold");
     const { fetcher } = feed(
       ok(calendar(["a@airbnb.com", "2027-03-05", "2027-03-10"])),
     );
@@ -283,7 +291,7 @@ describe("syncIcalSource", () => {
       .select()
       .from(reservations)
       .where(eq(reservations.id, req.reservationId));
-    expect(r.status).toBe("REQUESTED");
+    expect(r.status).toBe("PENDING_PAYMENT");
     expect((await periods(sourceId))[0].status).toBe("ACTIVE");
     const alerts = await db
       .select()
@@ -312,6 +320,7 @@ describe("export feed", () => {
         .fetcher,
       keys,
     });
+    await markFresh(sourceId);
     const req = await createHold(db, {
       propertyId: property.id,
       checkIn: d("2027-03-01"),
@@ -321,7 +330,7 @@ describe("export feed", () => {
       idempotencyKey: randomUUID(),
       now: new Date(),
     });
-    if (!req.ok) throw new Error("expected request");
+    if (!req.ok) throw new Error("expected hold");
     await db.insert(ownerBlocks).values({
       propertyId: property.id,
       startsOn: "2027-06-01",

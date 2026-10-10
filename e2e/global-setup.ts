@@ -13,7 +13,7 @@ export default async function globalSetup() {
   }
   const sql = postgres(url, { max: 1, onnotice: () => {} });
   try {
-    await sql`TRUNCATE reservations, owner_blocks, audit_logs, rate_limits CASCADE`;
+    await sql`TRUNCATE reservations, owner_blocks, audit_logs, rate_limits, admin_sessions, admin_users CASCADE`;
   } finally {
     await sql.end();
   }

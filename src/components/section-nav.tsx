@@ -8,6 +8,14 @@ import { useEffect, useLayoutEffect, useRef, useState } from "react";
  * scroll-behavior, off under reduced motion) and moves the underline at once.
  * The active link carries aria-current="location" so the position is not
  * conveyed by the underline alone.
+ *
+ * The bar pins directly under the sticky site header (4.5rem + 1px border)
+ * on a solid background: no backdrop-filter, which iOS Safari can fail to
+ * repaint on sticky elements during momentum scrolling.
+ *
+ * Target sections set scroll-margin-top to header + bar (8.3rem + 1px), plus
+ * 1.5rem of air, minus their own top padding, so a tapped section lands with
+ * its eyebrow just below the bar.
  */
 export function SectionNav({
   sections,
@@ -21,26 +29,35 @@ export function SectionNav({
   // While a click-initiated smooth scroll is running, hold the clicked
   // section so the underline doesn't flicker through the ones in between.
   const lockedUntil = useRef(0);
+  const navRef = useRef<HTMLElement>(null);
+  // True while a finger is on the bar, so auto-centring never fights a swipe.
+  const touching = useRef(false);
 
   useEffect(() => {
-    // Sections are "current" once their top passes this line, just below the
-    // sticky site header and this bar.
-    const READING_LINE = 160;
     let frame = 0;
     let unlockTimer = 0;
 
     const compute = () => {
       frame = 0;
       if (Date.now() < lockedUntil.current) return;
-      if (window.scrollY < 50) {
+      const nav = navRef.current;
+      if (!nav) return;
+      // Nothing is current until the bar has pinned under the header: while
+      // the introduction is on screen, no section is being read yet.
+      const rect = nav.getBoundingClientRect();
+      const pinnedAt = parseFloat(getComputedStyle(nav).top);
+      if (rect.top > pinnedAt + 1) {
         setActive(null);
         return;
       }
+      // Sections are "current" once their top comes within 1.5rem of this
+      // bar's bottom edge, when their label is already in view (measured, so
+      // it holds at any header height or text size).
+      const line = rect.bottom + 24;
       let current: string | null = null;
       for (const s of sections) {
         const el = document.getElementById(s.id);
-        if (el && el.getBoundingClientRect().top <= READING_LINE)
-          current = s.id;
+        if (el && el.getBoundingClientRect().top <= line) current = s.id;
       }
       // The last section may be too short to reach the line: at the very
       // bottom of the page, it is the current one.
@@ -53,8 +70,8 @@ export function SectionNav({
     const onScroll = () => {
       if (!frame) frame = requestAnimationFrame(compute);
     };
-    // After a click, re-check once the smooth scroll has had time to settle
-    // (scrollend is not available everywhere).
+    // After a click, re-check once the smooth scroll settles: on scrollend
+    // where supported, with a timer as the fallback.
     const onLock = () => {
       window.clearTimeout(unlockTimer);
       unlockTimer = window.setTimeout(
@@ -62,15 +79,23 @@ export function SectionNav({
         lockedUntil.current - Date.now() + 50,
       );
     };
+    const onScrollEnd = () => {
+      if (Date.now() < lockedUntil.current) {
+        lockedUntil.current = 0;
+        compute();
+      }
+    };
 
     compute();
     window.addEventListener("scroll", onScroll, { passive: true });
     window.addEventListener("section-nav-lock", onLock);
+    window.addEventListener("scrollend", onScrollEnd);
     return () => {
       cancelAnimationFrame(frame);
       window.clearTimeout(unlockTimer);
       window.removeEventListener("scroll", onScroll);
       window.removeEventListener("section-nav-lock", onLock);
+      window.removeEventListener("scrollend", onScrollEnd);
     };
   }, [sections]);
 
@@ -84,19 +109,33 @@ export function SectionNav({
       return;
     }
     setBar({ left: link.offsetLeft + 12, width: link.offsetWidth - 24 });
+    if (touching.current) return;
     const target = link.offsetLeft - (list.clientWidth - link.offsetWidth) / 2;
     list.scrollTo({ left: Math.max(0, target), behavior: "smooth" });
   }, [active]);
 
   return (
     <nav
+      ref={navRef}
       aria-label="On this page"
-      className="sticky top-18 z-30 border-b border-sage-300/60 bg-ivory/95 backdrop-blur"
+      className="sticky top-[calc(4.5rem+1px)] z-30 border-b border-sage-300/70 bg-ivory"
     >
-      <div className="mx-auto w-full max-w-6xl px-4 sm:px-6 lg:px-8">
+      <div className="mx-auto w-full max-w-6xl sm:px-6 lg:px-8">
+        {/* Phones: the list runs edge to edge with its own side padding, so
+            labels scroll right off the screen edge instead of being clipped
+            inside the page margin. */}
         <ul
           ref={listRef}
-          className="relative flex [scrollbar-width:none] gap-1 overflow-x-auto py-2"
+          onTouchStart={() => {
+            touching.current = true;
+          }}
+          onTouchEnd={() => {
+            touching.current = false;
+          }}
+          onTouchCancel={() => {
+            touching.current = false;
+          }}
+          className="relative flex [scrollbar-width:none] gap-1 overflow-x-auto overscroll-x-contain px-2 py-2 sm:px-0 [&::-webkit-scrollbar]:hidden"
         >
           {sections.map((s) => (
             <li key={s.id}>
@@ -111,7 +150,7 @@ export function SectionNav({
                   setActive(s.id);
                   window.dispatchEvent(new Event("section-nav-lock"));
                 }}
-                className={`inline-flex min-h-11 items-center rounded-full px-4 text-sm font-semibold whitespace-nowrap transition-colors duration-300 hover:bg-sage-100 ${
+                className={`inline-flex min-h-11 shrink-0 items-center rounded-full px-4 text-sm font-semibold whitespace-nowrap transition-colors duration-300 hover:bg-sage-100 ${
                   active === s.id ? "text-pine-900" : "text-ink-muted"
                 }`}
               >

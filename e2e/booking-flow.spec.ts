@@ -13,7 +13,7 @@ test.skip(
 test.describe.configure({ mode: "serial" });
 
 // Placeholder seed: £150 weeknights, £180 Fri/Sat, £60 cleaning, full payment
-// after the owner approves.
+// when booking.
 // Mon → Thu: 3 weeknights = £450 + £60 = £510. Each browser project books a
 // different week, because the projects share one database.
 const weeks = {
@@ -47,15 +47,14 @@ test("guest sees an itemised price and payment schedule before committing", asyn
   await expect(breakdown).toContainText("£450");
   await expect(breakdown).toContainText("Cleaning (placeholder)");
   await expect(breakdown).toContainText("£510");
+  await expect(page.getByText(/Full payment\s+due now/)).toBeVisible();
+  // Production's wording, unchanged.
   await expect(
-    page.getByText(/Full payment\s+due once the owner approves/),
-  ).toBeVisible();
-  await expect(
-    page.getByText(/owner approves it before you pay/),
+    page.getByText(/holds these dates for you for\s+30 minutes/),
   ).toBeVisible();
 });
 
-test("guest sends a request; the dates then show as unavailable to others", async ({
+test("guest books instantly; the dates are held and unavailable to others", async ({
   page,
   browser,
 }, info) => {
@@ -64,9 +63,17 @@ test("guest sends a request; the dates then show as unavailable to others", asyn
   await page.getByRole("link", { name: "Continue to book" }).click();
   await expect(page).toHaveURL(/\/book\?/);
 
-  await expect(page.getByText("Nothing is charged.")).toBeVisible();
+  // Before payment no deadline exists yet: the page says when it starts and
+  // shows no time.
+  await expect(
+    page.getByText(
+      "The 24-hour free-cancellation period starts once your payment is confirmed.",
+      { exact: false },
+    ),
+  ).toBeVisible();
+  await expect(page.getByText(/until \d{1,2}:\d\d/)).toHaveCount(0);
   // Server-side validation first.
-  await page.getByRole("button", { name: "Send booking request" }).click();
+  await page.getByRole("button", { name: "Hold these dates" }).click();
   await expect(
     page.getByRole("alert").filter({ hasText: "Please check the following" }),
   ).toBeVisible();
@@ -74,20 +81,26 @@ test("guest sends a request; the dates then show as unavailable to others", asyn
   await page.getByLabel("Lead guest name").fill("Test Guest");
   await page.getByLabel("Email address").fill("guest@example.test");
   await page.getByLabel(/I have read the/).check();
-  await page.getByRole("button", { name: "Send booking request" }).click();
+  await page.getByRole("button", { name: "Hold these dates" }).click();
 
+  // Without Stripe keys (this preview) the guest lands on their booking page
+  // instead of Stripe's; with keys they would go straight to Checkout.
   await expect(page).toHaveURL(/\/book\/LL-[A-Z0-9]{6}$/);
   await expect(
     page.getByRole("heading", { name: /Booking reference LL-/ }),
   ).toBeVisible();
-  // A request is never presented as a confirmed booking.
-  await expect(page.getByRole("status")).toContainText(
-    "Request sent: awaiting the owner’s approval",
+  // Production's page: a hold is never presented as a confirmed booking,
+  // and no cancellation deadline exists before payment.
+  const status = page.getByRole("status").filter({ hasText: "holding" });
+  await expect(status).toContainText("We’re holding these dates for you");
+  await expect(status).toContainText(
+    "confirmed only once payment has been verified",
   );
-  await expect(page.getByRole("status")).toContainText(
-    "Nothing has been charged",
-  );
-  await expect(page.getByRole("status")).not.toContainText("Confirmed");
+  await expect(status).not.toContainText("Status: confirmed");
+  await expect(
+    page.getByText(/You can cancel for a full refund until/),
+  ).toHaveCount(0);
+  await expect(page.getByText("Payment isn’t switched on yet.")).toBeVisible();
   const holdUrl = page.url();
 
   // A different visitor (no cookie) sees the not-found page, not the booking.

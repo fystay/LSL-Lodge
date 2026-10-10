@@ -21,7 +21,7 @@ import { BLOCKING_STATUSES, EXPIRING_STATUSES } from "./reservation-state";
 
 export type BlockSource =
   | "DIRECT_BOOKING"
-  /** A request awaiting the owner, an approved request awaiting payment, or an instant-mode hold. */
+  /** A booking held while the guest pays (or a legacy request/approval). */
   | "HOLD"
   | "OWNER_BLOCK"
   | "GOOGLE"

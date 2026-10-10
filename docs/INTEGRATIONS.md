@@ -79,22 +79,37 @@ domain doesn't depend on one vendor. No provider has been chosen.
 - **Health**: working / failing / out of date (no success within 60 minutes),
   last success, last attempt, imported period count, failure count and a
   plain-language error. After 3 consecutive failures the owner gets one alert
-  per outage. Guests see a short "running behind" note on the availability
-  page while any import is failing or stale; the owner's approval step is
-  the safety net.
-- **Export** (`/calendar/<token>.ics`): website bookings, live requests and
+  per outage.
+- **Safety stop when data is stale (default since 10 October 2026).** An
+  enabled import that has never synced, or has had no success within its
+  stale window (60 minutes by default), means Airbnb bookings may be
+  missing. While that is true: no new holds are taken (the guest sees the
+  form's existing "Online booking isn't available right now"), Checkout
+  isn't started, and a payment that arrives goes to the owner for review
+  (`CALENDAR_STALE`) instead of confirming. The dates stay held and the
+  money recorded; the owner checks Airbnb and confirms or cancels and
+  refunds. One failed poll with a recent success doesn't trigger it.
+  Existing confirmed bookings are never changed. Code:
+  `staleImportSources` in `src/server/calendar/sync.ts`; tests in
+  `holds.integration.test.ts` and `payments.integration.test.ts`. With no
+  Airbnb source configured there is nothing to check, so connecting the
+  Airbnb feed is a launch blocker.
+- **Clashes after confirmation**: an Airbnb booking that appears over a
+  confirmed website booking is listed under "Clashes to resolve" and
+  alerted; neither record is changed.
+- **Export** (`/calendar/<token>.ics`): website bookings, live holds and
   owner blocks as "Not available". Imported periods are never exported, so
   Airbnb and the site can't echo each other. The token is an HMAC under
   `CALENDAR_EXPORT_SECRET`; changing the secret revokes the link.
 
 ### Race windows that remain (iCal cannot close them)
 
-| Window                                                                           | What protects it                                                                                                   |
-| -------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------ |
-| An Airbnb booking exists, but its export hasn't updated or we haven't polled yet | The owner reviews every request; approval and payment both re-check imported periods. Stale sync is shown to both. |
-| A website request is held, but Airbnb hasn't read our export yet                 | Requests are exported immediately; Airbnb's read delay is outside our control.                                     |
-| Airbnb booking imported after a website booking was paid                         | Listed under "Clashes to resolve" and alerted. Neither record changes; the owner contacts a guest.                 |
-| Airbnb's feed empties by mistake                                                 | Removals are held until the owner confirms them.                                                                   |
+| Window                                                                           | What protects it                                                                                                                                                                                           |
+| -------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| An Airbnb booking exists, but its export hasn't updated or we haven't polled yet | Checkout and payment both re-check imported periods; a clash found then goes to owner review, not confirmation. A clash Airbnb reveals only later is alerted. Stale sync is shown to guests and the owner. |
+| A website hold or booking exists, but Airbnb hasn't read our export yet          | Holds and bookings are exported immediately; Airbnb's read delay is outside our control.                                                                                                                   |
+| Airbnb booking imported after a website booking was paid                         | Listed under "Clashes to resolve" and alerted. Neither record changes; the owner contacts a guest.                                                                                                         |
+| Airbnb's feed empties by mistake                                                 | Removals are held until the owner confirms them.                                                                                                                                                           |
 
 ## Stripe
 
@@ -121,8 +136,8 @@ Lifecycle: docs/PLAN.md §3.
 2. Install the Stripe CLI and run
    `stripe listen --forward-to localhost:3000/api/webhooks/stripe`. Copy the
    `whsec_…` it prints into `STRIPE_WEBHOOK_SECRET`.
-3. Start the app with the booking preview (see README), send a request,
-   approve it in `/admin`, then pay with the test card `4242 4242 4242 4242`.
+3. Start the app with the booking preview (see README), choose dates,
+   continue to payment, and pay with the test card `4242 4242 4242 4242`.
 4. `stripe trigger checkout.session.completed` sends synthetic events, which
    are recorded and, lacking a matching payment, safely ignored.
 

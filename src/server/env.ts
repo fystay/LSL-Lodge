@@ -19,7 +19,12 @@ const encryptionSchema = z.object({
       (value) => Buffer.from(value, "base64").length === 32,
       "must be a base64-encoded 32-byte key",
     ),
-  CREDENTIALS_ENCRYPTION_KEY_VERSION: z.coerce.number().int().positive(),
+  // Unset means 1 (the first key), as documented in .env.example.
+  CREDENTIALS_ENCRYPTION_KEY_VERSION: z.coerce
+    .number()
+    .int()
+    .positive()
+    .default(1),
 });
 
 const stripeSchema = z.object({

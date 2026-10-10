@@ -1,84 +1,76 @@
+import Link from "next/link";
+import { redirect } from "next/navigation";
+import { connection } from "next/server";
 import { Suspense } from "react";
-import { adminAuthMode } from "@/server/admin/auth";
-import { signInAction } from "../actions";
+import { adminAvailable, getAdmin } from "@/server/admin/auth";
+import { signInAction } from "../auth-actions";
+import { LoginForm } from "../auth-forms";
+import type { AuthFormState } from "../auth-state";
+import { AuthPage, Unavailable } from "../auth-ui";
 
 export const metadata = { title: "Sign in" };
 
+const NOTICES: Record<string, AuthFormState> = {
+  expired: {
+    status: "error",
+    message:
+      "That sign-in wasn’t finished within 10 minutes, so it was cancelled for your safety. Please sign in again.",
+  },
+  origin: {
+    status: "error",
+    message:
+      "That request couldn’t be verified, so nothing was changed. Please sign in again from this page.",
+  },
+  reset: {
+    status: "info",
+    message: "Your password has been changed. Sign in with your new password.",
+  },
+};
+
 export default function LoginPage({ searchParams }: PageProps<"/admin/login">) {
   return (
-    <main id="main" className="mx-auto w-full max-w-md flex-1 px-4 py-16">
-      <h1 className="text-title">Owner sign-in</h1>
+    <AuthPage title="Owner sign-in">
       <Suspense fallback={null}>
-        <LoginForm searchParams={searchParams} />
+        <Login searchParams={searchParams} />
       </Suspense>
-    </main>
+    </AuthPage>
   );
 }
 
-async function LoginForm({
+async function Login({
   searchParams,
 }: {
   searchParams: PageProps<"/admin/login">["searchParams"];
 }) {
-  const { error } = await searchParams;
-  const mode = adminAuthMode();
-  if (mode !== "local") {
-    return (
-      <p
-        role="status"
-        className="mt-6 rounded-soft border border-notice-ink/30 bg-notice p-4 text-notice-ink"
-      >
-        {mode === "supabase"
-          ? "Owner sign-in with multi-factor authentication is being connected and isn’t available yet."
-          : "Admin sign-in is not enabled on this deployment."}
-      </p>
-    );
-  }
+  const { error, notice } = await searchParams;
+  await connection();
+  if (!adminAvailable()) return <Unavailable />;
+  const key =
+    typeof notice === "string"
+      ? notice
+      : typeof error === "string"
+        ? error
+        : "";
+  // Already signed in (e.g. a duplicate tap finished the sign-in): go on,
+  // unless this page is explaining a refused request.
+  if (key !== "origin" && (await getAdmin())) redirect("/admin");
   return (
-    <form action={signInAction} className="mt-8 space-y-5">
-      <p className="text-sm text-ink-muted">
-        Local development sign-in. Not available on deployed sites.
+    <>
+      <LoginForm
+        action={signInAction}
+        initial={NOTICES[key] ?? { status: "idle" }}
+      />
+      <p className="mt-5 text-sm text-ink-muted">
+        You&rsquo;ll be asked for a code from your authenticator app next.
       </p>
-      {error && (
-        <p
-          role="alert"
-          className="rounded-soft border border-danger/40 bg-ivory p-3 font-medium text-danger"
+      <p className="mt-3 text-sm">
+        <Link
+          href="/admin/forgot"
+          className="font-semibold text-pine-900 underline underline-offset-4"
         >
-          Those details weren&rsquo;t recognised.
-        </p>
-      )}
-      <div>
-        <label htmlFor="email" className="font-semibold text-pine-900">
-          Email
-        </label>
-        <input
-          id="email"
-          name="email"
-          type="email"
-          autoComplete="username"
-          required
-          className="mt-1.5 block min-h-12 w-full rounded-soft border border-sage-600/60 bg-ivory px-3"
-        />
-      </div>
-      <div>
-        <label htmlFor="password" className="font-semibold text-pine-900">
-          Password
-        </label>
-        <input
-          id="password"
-          name="password"
-          type="password"
-          autoComplete="current-password"
-          required
-          className="mt-1.5 block min-h-12 w-full rounded-soft border border-sage-600/60 bg-ivory px-3"
-        />
-      </div>
-      <button
-        type="submit"
-        className="min-h-12 rounded-soft bg-pine-800 px-6 font-semibold text-ivory hover:bg-pine-700"
-      >
-        Sign in
-      </button>
-    </form>
+          Forgotten your password?
+        </Link>
+      </p>
+    </>
   );
 }

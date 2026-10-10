@@ -30,6 +30,10 @@ export interface TemplateData {
   adminUrl: string;
   /** Owner-only context, e.g. a review reason. */
   detail?: string | null;
+  /** "2:32pm on Saturday 10 October 2026", or null for older bookings. */
+  freeCancellationUntil?: string | null;
+  /** Formatted refund amount for refund messages. */
+  refundAmount?: string | null;
 }
 
 export interface RenderedEmail {
@@ -114,102 +118,6 @@ export const TEMPLATES: Record<
   NotificationTemplate,
   (d: TemplateData) => RenderedEmail
 > = {
-  request_received: (d) =>
-    render(
-      "We’ve received your booking request",
-      [
-        { p: `Hello ${d.guestName},` },
-        {
-          p: "Thank you for your booking request. It has been sent to the owner for approval. This is not yet a confirmed booking, and nothing has been charged.",
-        },
-        { list: stayLines(d) },
-        {
-          p: `The owner will reply by ${d.deadline} (UK time). Your dates are held for you until then. If the request is approved, we’ll email you a secure link to pay the full amount.`,
-        },
-        bookingLink(d, "View your request"),
-      ],
-      d,
-    ),
-  owner_new_request: (d) =>
-    render(
-      "New booking request to review",
-      [
-        { p: "A guest has sent a booking request." },
-        { list: stayLines(d) },
-        {
-          p: `Please approve or decline by ${d.deadline} (UK time). After that the request lapses and the dates are released.`,
-        },
-        adminLink(d),
-      ],
-      d,
-    ),
-  request_approved: (d) =>
-    render(
-      "Your booking request has been approved: payment needed",
-      [
-        { p: `Hello ${d.guestName},` },
-        {
-          p: `Good news: the owner has approved your request. To confirm the booking, please pay the full amount of ${d.amountDue} by ${d.deadline} (UK time).`,
-        },
-        { list: stayLines(d) },
-        {
-          p: "Your booking is confirmed only once payment has gone through. If payment isn’t made by the deadline, the dates are released.",
-        },
-        bookingLink(d, "Pay securely and confirm"),
-      ],
-      d,
-    ),
-  request_declined: (d) =>
-    render(
-      "Your booking request",
-      [
-        { p: `Hello ${d.guestName},` },
-        {
-          p: "Sorry, the owner wasn’t able to accept your booking request. Nothing has been charged, and the dates have been released.",
-        },
-        { list: stayLines(d) },
-        { link: "Look for other dates", href: `${d.siteUrl}/availability` },
-      ],
-      d,
-    ),
-  request_expired: (d) =>
-    render(
-      "Your booking request has lapsed",
-      [
-        { p: `Hello ${d.guestName},` },
-        {
-          p: "We’re sorry: the owner wasn’t able to reply in time, so your booking request has lapsed. Nothing has been charged.",
-        },
-        { list: stayLines(d) },
-        { link: "Search again", href: `${d.siteUrl}/availability` },
-      ],
-      d,
-    ),
-  owner_request_expired: (d) =>
-    render(
-      "A booking request lapsed without a reply",
-      [
-        {
-          p: "This request wasn’t approved or declined in time, so it has lapsed and the dates are free again. The guest has been told.",
-        },
-        { list: stayLines(d) },
-        adminLink(d),
-      ],
-      d,
-    ),
-  payment_window_expired: (d) =>
-    render(
-      "Your approved booking has lapsed",
-      [
-        { p: `Hello ${d.guestName},` },
-        {
-          p: "Payment wasn’t completed by the deadline, so the approved booking has lapsed and the dates have been released. Nothing has been charged.",
-        },
-        { list: stayLines(d) },
-        { link: "Search again", href: `${d.siteUrl}/availability` },
-      ],
-      d,
-    ),
   payment_failed: (d) =>
     render(
       "Your payment didn’t go through",
@@ -232,7 +140,12 @@ export const TEMPLATES: Record<
           p: `Your booking is confirmed and we’ve received your payment of ${d.amountDue}.`,
         },
         { list: stayLines(d) },
-        bookingLink(d, "View your booking"),
+        d.freeCancellationUntil
+          ? {
+              p: `Cancellation: you can cancel for a full refund before ${d.freeCancellationUntil} (UK time), 24 hours after your payment was confirmed. After that the booking is non-refundable. To cancel, contact us through the contact page on our website; your cancellation counts from when your message reaches us.`,
+            }
+          : { p: "Cancellation: see the cancellation policy below." },
+        bookingLink(d, "View or cancel your booking"),
       ],
       d,
     ),
@@ -270,12 +183,89 @@ export const TEMPLATES: Record<
       ],
       d,
     ),
+  booking_cancelled: (d) =>
+    render(
+      "Your booking has been cancelled",
+      [
+        { p: `Hello ${d.guestName},` },
+        {
+          p: "Your booking has been cancelled by the owner and the dates have been released. If you have made a payment, the owner will contact you about it.",
+        },
+        { list: stayLines(d) },
+        bookingLink(d, "View your booking"),
+      ],
+      d,
+    ),
+  guest_cancellation_confirmed: (d) =>
+    render(
+      "Your booking has been cancelled",
+      [
+        { p: `Hello ${d.guestName},` },
+        {
+          p: d.refundAmount
+            ? `As requested, your booking has been cancelled. You cancelled within the free-cancellation period, so a full refund of ${d.refundAmount} is being processed to your card. We’ll email you when it’s complete; banks usually take a few working days to show it.`
+            : "As requested, your booking has been cancelled. It was cancelled after the 24-hour free-cancellation period, so under the cancellation policy no refund is due.",
+        },
+        { list: stayLines(d) },
+        bookingLink(d, "View your booking"),
+      ],
+      d,
+    ),
+  refund_completed: (d) =>
+    render(
+      "Your refund has been processed",
+      [
+        { p: `Hello ${d.guestName},` },
+        {
+          p: `Your refund of ${d.refundAmount ?? "the amount due"} has been processed by our payment provider. Your bank may take a few working days to show it.`,
+        },
+        { list: stayLines(d) },
+      ],
+      d,
+    ),
+  owner_guest_cancelled: (d) =>
+    render(
+      "A guest has cancelled",
+      [
+        {
+          p: d.refundAmount
+            ? `The guest cancelled within 24 hours of the booking being confirmed, so a full refund of ${d.refundAmount} is being issued automatically. The dates are free again.`
+            : "The guest cancelled after the 24-hour free-cancellation period, so no refund was issued. The dates are free again.",
+        },
+        { list: stayLines(d) },
+        adminLink(d),
+      ],
+      d,
+    ),
+  owner_refund_failed: (d) =>
+    render(
+      "Action needed: a refund couldn’t be issued",
+      [
+        {
+          p: "A refund hasn’t gone through: either Stripe couldn’t take the request after several attempts, or Stripe reported the refund as failed. The guest is owed this money. Please check the booking and Stripe, and refund again from the booking page if needed.",
+        },
+        { list: stayLines(d) },
+        adminLink(d),
+      ],
+      d,
+    ),
+  owner_system_alert: (d) =>
+    render(
+      "Booking system needs attention",
+      [
+        {
+          p: "A routine check found a problem with the booking system's background work (for example emails not being sent, payment notifications failing, calendar sync out of date, or a scheduled job not running). Details are on the System page in admin.",
+        },
+        { link: "Open the System page", href: `${d.siteUrl}/admin/system` },
+      ],
+      d,
+    ),
   owner_calendar_sync_failed: (d) =>
     render(
       "Calendar sync is failing",
       [
         {
-          p: `${d.detail ?? "An imported calendar"} has failed to sync repeatedly. Dates booked elsewhere may not be blocked on the website until it recovers. Previously imported dates remain blocked.`,
+          p: `${d.detail ?? "An imported calendar"} has failed to sync repeatedly. Previously imported dates remain blocked. Once it has had no successful sync for its stale period (60 minutes by default), the website stops taking new bookings, and any payment that arrives goes to you for review instead of confirming, until the calendar syncs again.`,
         },
         { link: "Check calendar connections", href: d.adminUrl },
       ],

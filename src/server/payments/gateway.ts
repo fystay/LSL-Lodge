@@ -32,15 +32,39 @@ export interface CreateCheckoutParams {
   successUrl: string;
   cancelUrl: string;
   expiresAt: Date;
+  /** Shown beside Checkout's pay button (the cancellation deadline). */
+  submitMessage?: string;
   /** Stable per payment attempt: a retried request returns the same session. */
   idempotencyKey: string;
 }
 
+export type RefundStatus =
+  "pending" | "requires_action" | "succeeded" | "failed" | "canceled";
+
+export interface RefundSnapshot {
+  id: string;
+  status: RefundStatus;
+  amount: number;
+  currency: string;
+  paymentIntentId: string | null;
+  metadata: Record<string, string>;
+}
+
 export interface PaymentGateway {
+  /** Refunds part or all of a captured payment. Idempotent per key. */
+  createRefund(params: {
+    paymentIntentId: string;
+    amountMinor: number;
+    refundPaymentId: string;
+    reservationId: string;
+    idempotencyKey: string;
+  }): Promise<RefundSnapshot>;
   createCheckoutSession(
     params: CreateCheckoutParams,
   ): Promise<CheckoutSessionSnapshot>;
   retrieveCheckoutSession(id: string): Promise<CheckoutSessionSnapshot>;
+  /** Stripe's current view of a refund (reconciliation). */
+  retrieveRefund(id: string): Promise<RefundSnapshot>;
   /** Stops an open session accepting payment. No-op if it already ended. */
   expireCheckoutSession(id: string): Promise<void>;
 }
@@ -68,43 +92,94 @@ export function snapshotFromStripe(
   };
 }
 
+export function refundFromStripe(refund: Stripe.Refund): RefundSnapshot {
+  const intent = refund.payment_intent;
+  return {
+    id: refund.id,
+    status: (refund.status ?? "pending") as RefundStatus,
+    amount: refund.amount,
+    currency: refund.currency,
+    paymentIntentId: typeof intent === "string" ? intent : (intent?.id ?? null),
+    metadata: (refund.metadata ?? {}) as Record<string, string>,
+  };
+}
+
+/**
+ * The Checkout Session request. Verified against the Stripe sandbox on
+ * 10 October 2026 (accepted as sent; payload shapes in
+ * tests/fixtures/stripe/).
+ */
+export function checkoutSessionParams(
+  p: CreateCheckoutParams,
+): Stripe.Checkout.SessionCreateParams {
+  return {
+    mode: "payment",
+    // Card (including wallets) settles synchronously, so a payment can't
+    // still be pending when the dates' hold runs out.
+    allowed_payment_method_types: ["card"],
+    // Charge in the booking's currency only. With Stripe's Adaptive Pricing
+    // a guest could pay in their own currency (with a conversion fee), and a
+    // "full refund" in GBP could then return a different amount in theirs.
+    adaptive_pricing: { enabled: false },
+    line_items: [
+      {
+        quantity: 1,
+        price_data: {
+          currency: p.currency.toLowerCase(),
+          unit_amount: p.amountMinor,
+          product_data: { name: p.description },
+        },
+      },
+    ],
+    customer_email: p.customerEmail,
+    client_reference_id: p.reservationId,
+    metadata: {
+      reservation_id: p.reservationId,
+      payment_id: p.paymentId,
+      public_ref: p.publicRef,
+    },
+    payment_intent_data: {
+      metadata: {
+        reservation_id: p.reservationId,
+        payment_id: p.paymentId,
+      },
+    },
+    success_url: p.successUrl,
+    cancel_url: p.cancelUrl,
+    expires_at: Math.floor(p.expiresAt.getTime() / 1000),
+    ...(p.submitMessage
+      ? { custom_text: { submit: { message: p.submitMessage } } }
+      : {}),
+  };
+}
+
 class StripeCheckoutGateway implements PaymentGateway {
   constructor(private readonly stripe: Stripe) {}
 
+  async createRefund(p: {
+    paymentIntentId: string;
+    amountMinor: number;
+    refundPaymentId: string;
+    reservationId: string;
+    idempotencyKey: string;
+  }) {
+    const refund = await this.stripe.refunds.create(
+      {
+        payment_intent: p.paymentIntentId,
+        amount: p.amountMinor,
+        metadata: {
+          refund_payment_id: p.refundPaymentId,
+          reservation_id: p.reservationId,
+        },
+      },
+      { idempotencyKey: p.idempotencyKey },
+    );
+    return refundFromStripe(refund);
+  }
+
   async createCheckoutSession(p: CreateCheckoutParams) {
     const session = await this.stripe.checkout.sessions.create(
-      {
-        mode: "payment",
-        // Card (including wallets) settles synchronously, so a payment can't
-        // still be pending when the dates' hold runs out.
-        allowed_payment_method_types: ["card"],
-        line_items: [
-          {
-            quantity: 1,
-            price_data: {
-              currency: p.currency.toLowerCase(),
-              unit_amount: p.amountMinor,
-              product_data: { name: p.description },
-            },
-          },
-        ],
-        customer_email: p.customerEmail,
-        client_reference_id: p.reservationId,
-        metadata: {
-          reservation_id: p.reservationId,
-          payment_id: p.paymentId,
-          public_ref: p.publicRef,
-        },
-        payment_intent_data: {
-          metadata: {
-            reservation_id: p.reservationId,
-            payment_id: p.paymentId,
-          },
-        },
-        success_url: p.successUrl,
-        cancel_url: p.cancelUrl,
-        expires_at: Math.floor(p.expiresAt.getTime() / 1000),
-      },
+      checkoutSessionParams(p),
       { idempotencyKey: p.idempotencyKey },
     );
     return snapshotFromStripe(session);
@@ -112,6 +187,10 @@ class StripeCheckoutGateway implements PaymentGateway {
 
   async retrieveCheckoutSession(id: string) {
     return snapshotFromStripe(await this.stripe.checkout.sessions.retrieve(id));
+  }
+
+  async retrieveRefund(id: string) {
+    return refundFromStripe(await this.stripe.refunds.retrieve(id));
   }
 
   async expireCheckoutSession(id: string) {

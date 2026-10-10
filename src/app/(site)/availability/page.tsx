@@ -20,7 +20,6 @@ import { validateStaySearch } from "@/lib/stay-search";
 import {
   calendarStatuses,
   checkStay,
-  calendarSyncDelayed,
   getBookingContext,
   type BookingContext,
 } from "@/server/booking/public";
@@ -201,11 +200,7 @@ async function StayResult({
   today: IsoDate;
   now: Date;
 }) {
-  const [{ available, quote }, syncDelayed] = await Promise.all([
-    checkStay(ctx, search, today, now),
-    calendarSyncDelayed(ctx, now),
-  ]);
-  const request = ctx.property.bookingMode === "REQUEST";
+  const { available, quote } = await checkStay(ctx, search, today, now);
   if (!available) {
     return (
       <div className="mt-5 max-w-2xl space-y-2">
@@ -240,27 +235,14 @@ async function StayResult({
       <div>
         <p className="font-semibold text-success">Available for your dates</p>
         <div className="mt-4">
-          <QuoteSummary
-            quote={quote.quote}
-            today={today}
-            dueLabels={
-              request ? { 1: "due once the owner approves" } : undefined
-            }
-          />
+          <QuoteSummary quote={quote.quote} today={today} />
         </div>
       </div>
       <div className="rounded-soft bg-ivory p-5">
         <p className="text-sm text-ink-muted">
-          {request
-            ? "Nothing is reserved or charged yet. Next, you send a booking request; the owner approves it before you pay."
-            : "Nothing is reserved yet. The next step holds these dates for you for 30 minutes while you complete your booking."}
+          Nothing is reserved yet. The next step holds these dates for you for
+          30 minutes while you complete your booking.
         </p>
-        {syncDelayed && (
-          <p className="mt-3 text-sm text-notice-ink">
-            Our link with other booking calendars is running behind, so the
-            owner will double-check these dates before approving.
-          </p>
-        )}
         <Link
           href={`/book?${query}`}
           className="mt-4 flex min-h-12 items-center justify-center rounded-soft bg-pine-800 px-6 font-semibold text-ivory hover:bg-pine-700"

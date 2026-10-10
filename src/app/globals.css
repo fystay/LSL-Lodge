@@ -173,10 +173,10 @@
   }
 }
 
-/* Hero photo melts into the page: bottom fade on phones; left and bottom
- * fades on desktop where it bleeds to the right edge. */
+/* Hero photo melts into the page: a short bottom fade on phones (mostly under
+ * the search card); left and bottom fades on desktop where it bleeds right. */
 .hero-fade {
-  mask-image: linear-gradient(to bottom, #000 62%, transparent 100%);
+  mask-image: linear-gradient(to bottom, #000 80%, transparent 100%);
 }
 @media (min-width: 64rem) {
   .hero-fade {
@@ -185,6 +185,17 @@
       linear-gradient(to bottom, #000 78%, transparent 100%);
     mask-composite: intersect;
   }
+}
+
+/* iOS Safari gives date inputs an intrinsic width that ignores width: 100%,
+   so they overflow narrow grid cells; reset that and keep the value left-aligned. */
+input[type="date"] {
+  -webkit-appearance: none;
+  appearance: none;
+  min-width: 0;
+}
+input[type="date"]::-webkit-date-and-time-value {
+  text-align: left;
 }
 
 @media (prefers-reduced-motion: no-preference) {
@@ -206,6 +217,11 @@
   }
   .enter-delay-3 {
     animation-delay: 360ms;
+  }
+
+  /* Hero room label fades in as each slide arrives. */
+  .label-in {
+    animation: fade-in 700ms var(--ease-calm) both;
   }
 
   /* Active hero slide drifts slowly inward ("Ken Burns"). */

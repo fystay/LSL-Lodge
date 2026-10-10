@@ -98,17 +98,18 @@ export function NotReady({ reason }: { reason: string }) {
 }
 
 const statusTone: Record<string, string> = {
-  REQUESTED: "Request (awaiting your decision)",
-  APPROVED: "Approved (awaiting payment)",
-  DECLINED: "Declined",
+  // Legacy request-mode statuses (no new bookings use them).
+  REQUESTED: "Request (legacy)",
+  APPROVED: "Approved, awaiting payment (legacy)",
+  DECLINED: "Declined (legacy)",
   CONFIRMED: "Confirmed",
   PAYMENT_DUE: "Balance due",
-  PENDING_PAYMENT: "Instant hold (awaiting payment)",
+  PENDING_PAYMENT: "Awaiting payment (dates held)",
   REQUIRES_REVIEW: "Needs review",
   CANCELLED: "Cancelled",
   EXPIRED: "Expired",
-  REFUND_PENDING: "Refund pending",
-  REFUNDED: "Refunded",
+  REFUND_PENDING: "Cancelled, refund in progress",
+  REFUNDED: "Cancelled and refunded",
 };
 
 export const statusLabel = (status: string) => statusTone[status] ?? status;

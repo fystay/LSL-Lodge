@@ -1,26 +1,9 @@
-import { db, isDatabaseConfigured } from "@/server/db/client";
-import { expireLapsedHolds } from "@/server/booking/holds";
-import { isAuthorisedJobRequest } from "@/server/jobs/auth";
-import { cancelOpenCheckouts } from "@/server/payments/checkout";
-import { getPaymentGateway } from "@/server/payments/gateway";
-import { pruneRateLimits } from "@/server/security/rate-limit";
+import { expireHoldsJob } from "@/server/jobs/definitions";
+import { handleJobRequest } from "@/server/jobs/route";
 
-/**
- * Sweeps lapsed requests, approvals awaiting payment and instant holds, then
- * closes their open Stripe Checkout Sessions. Deadlines are also enforced at
- * request time, so this job only tidies state and sends the "expired"
- * messages; missing a run never double-books.
- */
-export async function GET(request: Request) {
-  if (!isAuthorisedJobRequest(request)) {
-    return Response.json({ error: "unauthorised" }, { status: 401 });
-  }
-  if (!isDatabaseConfigured()) {
-    return Response.json({ error: "not_configured" }, { status: 503 });
-  }
-  const database = db();
-  const expired = await expireLapsedHolds(database, null, new Date());
-  await cancelOpenCheckouts(database, getPaymentGateway(), expired);
-  await pruneRateLimits(database);
-  return Response.json({ expired: expired.length });
+/** Runs the "expire-holds" job now (under its lease). See src/server/jobs/definitions.ts. */
+export const maxDuration = 300;
+
+export function GET(request: Request) {
+  return handleJobRequest(request, expireHoldsJob);
 }

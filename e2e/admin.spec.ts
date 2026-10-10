@@ -1,10 +1,12 @@
 import { settleAnimations } from "./support";
 import { expect, test, type Page } from "@playwright/test";
+import postgres from "postgres";
+import { mintAdminSession } from "./admin-auth";
 
 /**
- * Admin journeys against the seeded local database. Needs E2E_BOOKING=true
- * and the server running with ADMIN_AUTH_MODE=local and test credentials
- * (E2E_ADMIN_EMAIL / ADMIN_LOCAL_PASSWORD).
+ * Admin journeys against the seeded local database (E2E_BOOKING=true). The
+ * signed-in owner session is created directly in the local test database;
+ * the real sign-in journey is covered in admin-security.spec.ts.
  */
 test.skip(
   process.env.E2E_BOOKING !== "true",
@@ -12,14 +14,9 @@ test.skip(
 );
 test.describe.configure({ mode: "serial" });
 
-const email = process.env.E2E_ADMIN_EMAIL ?? "owner@example.test";
-const password = process.env.ADMIN_LOCAL_PASSWORD ?? "";
-
 async function signIn(page: Page) {
-  await page.goto("/admin/login");
-  await page.getByLabel("Email").fill(email);
-  await page.getByLabel("Password").fill(password);
-  await page.getByRole("button", { name: "Sign in" }).click();
+  await mintAdminSession(page.context());
+  await page.goto("/admin");
   await expect(
     page.getByRole("heading", { level: 1, name: "Overview" }),
   ).toBeVisible();
@@ -34,22 +31,13 @@ test("admin pages require sign-in", async ({ page }) => {
     "/admin/pricing",
     "/admin/settings",
     "/admin/calendars",
+    "/admin/account",
+    "/admin/system",
+    "/admin/reauth",
   ]) {
     await page.goto(path);
     await expect(page).toHaveURL(/\/admin\/login$/);
   }
-});
-
-test("wrong credentials are refused without saying which part was wrong", async ({
-  page,
-}) => {
-  await page.goto("/admin/login");
-  await page.getByLabel("Email").fill(email);
-  await page.getByLabel("Password").fill("definitely-not-the-password");
-  await page.getByRole("button", { name: "Sign in" }).click();
-  await expect(
-    page.getByRole("alert").filter({ hasText: "recognised" }),
-  ).toBeVisible();
 });
 
 test("owner blocks dates, sees them on the calendar, and guests can't book them", async ({
@@ -63,14 +51,28 @@ test("owner blocks dates, sees them on the calendar, and guests can't book them"
     .getByRole("navigation", { name: "Admin" })
     .getByRole("link", { name: "Blocked dates" })
     .click();
-  await page.getByLabel("First night").fill(`${month}-06`);
-  await page.getByLabel(/End date/).fill(`${month}-09`);
-  await page.getByLabel("Reason (private)").fill("Maintenance (test)");
-  await page.getByRole("button", { name: "Block dates" }).click();
+  const add = page
+    .locator("form")
+    .filter({ has: page.getByRole("button", { name: "Block dates" }) });
+  await add.getByLabel("First night").fill(`${month}-06`);
+  await add.getByLabel(/End date/).fill(`${month}-09`);
+  await add.getByLabel("Reason (private)").fill(`Maintenance ${month}`);
+  await add.getByRole("button", { name: "Block dates" }).click();
   await expect(page.getByRole("status")).toHaveText("Dates blocked.");
 
+  // The owner can change a block's dates and label (audited).
+  const row = () =>
+    page.getByRole("listitem").filter({ hasText: `Maintenance ${month}` });
+  await row().getByText("Change dates or label").click();
+  await row().getByLabel("End date").fill(`${month}-10`);
+  await row().getByRole("button", { name: "Save changes" }).click();
+  await expect(page.getByRole("status")).toHaveText("Block updated.");
+
+  // The calendar labels blocks distinctly from bookings, with the reason.
   await page.goto(`/admin/calendar?month=${month}`);
-  await expect(page.getByRole("table")).toContainText("Owner block");
+  await expect(page.getByRole("table")).toContainText(
+    `Blocked: Maintenance ${month}`,
+  );
 
   const guest = await browser.newContext();
   const guestPage = await guest.newPage();
@@ -80,16 +82,24 @@ test("owner blocks dates, sees them on the calendar, and guests can't book them"
   await expect(
     guestPage.getByText(/isn’t available for all of those nights/),
   ).toBeVisible();
+
+  // Unblocking needs explicit confirmation, then the dates are bookable.
+  await page.goto("/admin/blocks");
+  await row().getByLabel("Confirm").check();
+  await row().getByRole("button", { name: "Unblock" }).click();
+  await expect(page.getByRole("status")).toContainText("Block removed");
+  await guestPage.reload();
+  await expect(guestPage.getByText("Available for your dates")).toBeVisible();
   await guest.close();
 
-  // Removal needs explicit confirmation.
-  await page.goto("/admin/blocks");
-  const row = page
-    .getByRole("listitem")
-    .filter({ hasText: "Maintenance (test)" });
-  await row.getByLabel("Confirm").check();
-  await row.getByRole("button", { name: "Remove block" }).click();
-  await expect(page.getByRole("status")).toContainText("Block removed");
+  // Every change is in the audit history on the overview.
+  await page.goto("/admin");
+  for (const action of [
+    "owner_block.created",
+    "owner_block.updated",
+    "owner_block.removed",
+  ])
+    await expect(page.getByText(action).first()).toBeVisible();
 });
 
 test("owner adds a higher-priority rate and new quotes use it", async ({
@@ -163,7 +173,13 @@ test("admin pages have no automatically detectable WCAG A/AA violations", async 
     "/admin/pricing",
     "/admin/settings",
     "/admin/calendars",
+    "/admin/account",
+    "/admin/system",
+    "/admin/login",
   ]) {
+    // The sign-in page is checked as owners see it: signed out (signed-in
+    // owners are sent straight to the dashboard).
+    if (path === "/admin/login") await page.context().clearCookies();
     await page.goto(path);
     await settleAnimations(page);
     const results = await new AxeBuilder({ page })
@@ -172,5 +188,78 @@ test("admin pages have no automatically detectable WCAG A/AA violations", async 
     expect(results.violations.map((v) => `${path} ${v.id}: ${v.help}`)).toEqual(
       [],
     );
+  }
+});
+
+test("admin pages don't scroll sideways on a phone; wide tables scroll in place", async ({
+  page,
+  isMobile,
+}) => {
+  // Phone emulation zooms out to fit wide pages, hiding the overflow; a
+  // desktop browser narrowed to phone width measures it honestly.
+  test.skip(isMobile, "measured in the desktop project at phone width");
+  await page.setViewportSize({ width: 390, height: 844 });
+  await signIn(page);
+  for (const path of [
+    "/admin",
+    "/admin/bookings",
+    "/admin/calendar",
+    "/admin/blocks",
+    "/admin/pricing",
+    "/admin/settings",
+    "/admin/calendars",
+    "/admin/system",
+  ]) {
+    await page.goto(path);
+    // Wait for the streamed content (e.g. the calendar table) to arrive.
+    await page.waitForLoadState("networkidle");
+    await expect(page.getByText("Loading…")).toHaveCount(0);
+    const overflow = await page.evaluate(
+      () =>
+        document.documentElement.scrollWidth -
+        document.documentElement.clientWidth,
+    );
+    expect(overflow, path).toBeLessThanOrEqual(0);
+  }
+  // The calendar's own region still scrolls to show the whole month.
+  await page.goto("/admin/calendar");
+  const region = page.getByRole("region", { name: /Calendar/ });
+  expect(await region.evaluate((el) => el.scrollWidth > el.clientWidth)).toBe(
+    true,
+  );
+});
+
+test("the system page's problem list is accessible when something is wrong", async ({
+  page,
+}, info) => {
+  // Regression: the health problems list carried role="alert" on its <ul>,
+  // which strips list semantics from its <li> items (axe "listitem"). It
+  // only renders while health reports a problem, so the general sweep
+  // above caught it only intermittently. Force a problem deterministically.
+  const AxeBuilder = (await import("@axe-core/playwright")).default;
+  const sql = postgres(process.env.DATABASE_URL!, {
+    max: 1,
+    onnotice: () => {},
+  });
+  const eventId = `evt_a11y_${info.project.name}_${Date.now()}`;
+  try {
+    await sql`
+      INSERT INTO webhook_events (provider, provider_event_id, type, state)
+      VALUES ('stripe', ${eventId}, 'checkout.session.completed', 'FAILED')`;
+    await signIn(page);
+    await page.goto("/admin/system");
+    await settleAnimations(page);
+    const alert = page.getByRole("alert").filter({
+      hasText: "Some Stripe notifications failed to process",
+    });
+    await expect(alert).toBeVisible();
+    await expect(alert.getByRole("listitem").first()).toBeVisible();
+    const results = await new AxeBuilder({ page })
+      .withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa", "wcag22aa"])
+      .analyze();
+    expect(results.violations.map((v) => `${v.id}: ${v.help}`)).toEqual([]);
+  } finally {
+    await sql`DELETE FROM webhook_events WHERE provider_event_id = ${eventId}`;
+    await sql.end();
   }
 });

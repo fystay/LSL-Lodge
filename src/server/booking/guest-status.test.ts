@@ -18,29 +18,42 @@ describe("guestStatus", () => {
     }
   });
 
-  it("distinguishes awaiting approval, awaiting payment and processing", () => {
-    expect(
-      guestStatus(
-        { status: "REQUESTED", holdExpiresAt: later, paymentStatuses: [] },
-        NOW,
-      ),
-    ).toBe("AWAITING_APPROVAL");
-    expect(
-      guestStatus(
-        { status: "APPROVED", holdExpiresAt: later, paymentStatuses: [] },
-        NOW,
-      ),
-    ).toBe("APPROVED_AWAITING_PAYMENT");
+  it("distinguishes a held booking awaiting payment from processing", () => {
     expect(
       guestStatus(
         {
-          status: "APPROVED",
+          status: "PENDING_PAYMENT",
+          holdExpiresAt: later,
+          paymentStatuses: [],
+        },
+        NOW,
+      ),
+    ).toBe("HOLD_AWAITING_PAYMENT");
+    expect(
+      guestStatus(
+        {
+          status: "PENDING_PAYMENT",
           holdExpiresAt: later,
           paymentStatuses: ["PROCESSING"],
         },
         NOW,
       ),
     ).toBe("PAYMENT_PROCESSING");
+  });
+
+  it("maps legacy request-mode rows safely", () => {
+    expect(
+      guestStatus(
+        { status: "REQUESTED", holdExpiresAt: later, paymentStatuses: [] },
+        NOW,
+      ),
+    ).toBe("UNDER_REVIEW");
+    expect(
+      guestStatus(
+        { status: "APPROVED", holdExpiresAt: later, paymentStatuses: [] },
+        NOW,
+      ),
+    ).toBe("HOLD_AWAITING_PAYMENT");
   });
 
   it("shows a lapsed request or approval as expired before the sweeper runs", () => {
@@ -70,7 +83,10 @@ describe("guestStatus", () => {
     const at = (status: (typeof RESERVATION_STATUSES)[number]) =>
       guestStatus({ status, holdExpiresAt: null, paymentStatuses: [] }, NOW);
     expect(at("DECLINED")).toBe("DECLINED");
-    expect(at("REFUNDED")).toBe("CANCELLED");
+    expect(at("CANCELLED")).toBe("CANCELLED");
+    // A refund is only "refunded" once Stripe confirmed it (REFUNDED).
+    expect(at("REFUND_PENDING")).toBe("CANCELLED_REFUND_IN_PROGRESS");
+    expect(at("REFUNDED")).toBe("CANCELLED_REFUNDED");
     expect(at("REQUIRES_REVIEW")).toBe("UNDER_REVIEW");
     expect(at("PAYMENT_DUE")).toBe("CONFIRMED_BALANCE_DUE");
   });

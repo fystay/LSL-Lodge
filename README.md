@@ -3,8 +3,8 @@
 Direct-booking website for Lodge on the Lake, a lakeside lodge at South
 Lakeland Leisure Village. It runs alongside the existing Airbnb listing.
 
-**Status:** pre-launch. Built: public site, booking engine, host-approval
-requests, owner dashboard, test-mode Stripe Checkout, email notifications
+**Status:** pre-launch. Built: public site, instant-booking engine, owner
+dashboard, test-mode Stripe Checkout, email notifications
 (off by default) and Airbnb iCal sync. No payments or emails are live, the
 booking flow is off unless explicitly enabled outside production, and the
 site is `noindex`. Property facts, prices and policies await the owner. See
@@ -12,9 +12,17 @@ docs/PLAN.md §7 for what is still open and
 [docs/LAUNCH-READINESS.md](docs/LAUNCH-READINESS.md) for the launch
 checklist.
 
-How booking works: the guest sends a request (nothing charged, dates held)
-→ the owner approves or declines in `/admin` → an approved guest pays the
-full amount on Stripe → the booking confirms only when payment is verified.
+How booking works (instant booking, no host approval): the guest picks
+available dates and enters their details → the dates are held for 30
+minutes while they pay the full amount on Stripe-hosted Checkout → the
+booking confirms only when the server has verified the payment (signed
+webhook, or a server-side fetch of the session). Guests can cancel for a full
+refund strictly within 24 hours of the booking being confirmed (the clock
+starts at verified payment); after that the booking is non-refundable
+(src/server/booking/cancellation-policy.ts). The production UI
+(lsllodge.vercel.app) is the reference for the public site; see
+docs/FRONTEND-CHANGES.md and docs/VISUAL-REGRESSION.md. The owner blocks
+and unblocks dates in `/admin/blocks`.
 
 - Project charter: [CLAUDE.md](CLAUDE.md)
 - Plan, data model, payment and sync design: [docs/PLAN.md](docs/PLAN.md)
@@ -22,6 +30,7 @@ full amount on Stripe → the booking confirms only when payment is verified.
 - Owner inputs needed: [docs/OWNER-DECISIONS.md](docs/OWNER-DECISIONS.md)
 - Property facts and their sources: [docs/property-facts-and-policies.md](docs/property-facts-and-policies.md)
 - Launch checklist: [docs/LAUNCH-READINESS.md](docs/LAUNCH-READINESS.md)
+- Staging setup and customer demo: [docs/STAGING-SETUP.md](docs/STAGING-SETUP.md), [docs/DEMO.md](docs/DEMO.md)
 - Content and photography: [docs/CONTENT.md](docs/CONTENT.md)
 - Security notes: [docs/SECURITY.md](docs/SECURITY.md)
 
@@ -69,19 +78,19 @@ pnpm db:seed:dev            # placeholder property, rates and payment plan (loca
 
 # In .env.local (never commit real values):
 #   BOOKING_PREVIEW=true
-#   ADMIN_AUTH_MODE=local
-#   ADMIN_EMAILS=you@example.com
-#   ADMIN_LOCAL_PASSWORD=<16+ characters>
-#   ADMIN_SESSION_SECRET=<32+ random characters>
+#   CREDENTIALS_ENCRYPTION_KEY=<openssl rand -base64 32>
+#   CREDENTIALS_ENCRYPTION_KEY_VERSION=1
 pnpm dev                    # /availability for guests, /admin for the owner
+pnpm admin invite --email you@example.com   # prints a one-time set-up link
 ```
 
 The seed's prices are made up. Real rates are entered by the owner in
-`/admin/pricing`. Local admin sign-in is refused on any Vercel deployment.
+`/admin/pricing`. Admin accounts need an authenticator app; see
+docs/SECURITY.md ("Admin authentication") and `scripts/admin.mts`.
 
-To try the full journey: request dates at `/availability`, approve the
-request from the `/admin` overview, then return to the booking page (same
-browser). Without Stripe keys the page says payment isn't switched on. To pay
+To try the full journey: choose dates at `/availability` and continue to
+payment. Without Stripe keys you land on the booking page, which holds the
+dates and says payment isn't switched on. To pay
 in test mode, add `STRIPE_SECRET_KEY=sk_test_…` and run `stripe listen` (see
 docs/INTEGRATIONS.md). Messages are recorded as "not sent" and can be
 previewed on the booking's admin page. Optional extras: `GUEST_LINK_SECRET`
@@ -90,15 +99,13 @@ previewed on the booking's admin page. Optional extras: `GUEST_LINK_SECRET`
 
 ### Scheduled jobs
 
-Each needs `Authorization: Bearer $CRON_SECRET` (32+ characters). No
-scheduler is configured yet (owner decision: Vercel Pro cron or Supabase
-`pg_cron`).
-
-| Endpoint                       | Suggested interval | Does                                                                 |
-| ------------------------------ | ------------------ | -------------------------------------------------------------------- |
-| `/api/jobs/expire-holds`       | 5 minutes          | Expires lapsed requests/approvals, closes their Stripe sessions      |
-| `/api/jobs/send-notifications` | 1–5 minutes        | Delivers queued emails (or marks them not sent when delivery is off) |
-| `/api/jobs/sync-calendars`     | 5 minutes          | Polls imported iCal feeds that are due                               |
+A scheduler must call `GET /api/jobs/tick` every 5 minutes with
+`Authorization: Bearer $CRON_SECRET`; it runs hold expiry, email
+delivery, refund sending and retries, Airbnb sync and housekeeping, each under a lease so runs never
+overlap. An uptime monitor should call `/api/health` (with
+`HEALTHCHECK_SECRET`). **No scheduler is configured yet**; see
+[docs/SCHEDULER.md](docs/SCHEDULER.md). `/admin/system` shows every run and
+has "Run now".
 
 Stripe calls `/api/webhooks/stripe` (signature-verified).
 
@@ -119,6 +126,7 @@ To run the booking and admin E2E tests too:
 | `pnpm test:e2e`                | Playwright E2E and axe accessibility tests against the production build (`pnpm build` first)                 |
 | `pnpm check`                   | Format, lint, types and unit tests                                                                           |
 | `pnpm db:seed:dev`             | Placeholder data for a **local** database (refuses any other host)                                           |
+| `pnpm admin <command>`         | Admin accounts: `invite`, `reset`, `disable`, `enable`, `list`                                               |
 
 CI (`.github/workflows/ci.yml`) runs all of the above, plus a production
 build, a dependency audit and integration tests against a Postgres service
@@ -134,7 +142,7 @@ src/
   lib/                 Shared, framework-free logic: dates, time zones, search validation
   server/              Server-only domain code
     admin/             Admin auth, validation schemas, queries and audited mutations
-    booking/           State machine, availability, requests/holds, owner decisions, guest links
+    booking/           State machine, availability, holds, owner blocks, cancellation policy, guest links
     jobs/              Scheduler authentication
     calendar/          iCal parsing, SSRF-safe fetch, import sync, export feed
     contact/           Enquiry validation

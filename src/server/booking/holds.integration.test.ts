@@ -28,6 +28,7 @@ import {
   expireLapsedHolds,
   findReservationForGuest,
   removeOwnerBlock,
+  updateOwnerBlock,
   type HoldInput,
 } from "./holds";
 
@@ -37,8 +38,8 @@ afterAll(async () => db.$client.end());
 // "Now" is fixed so dates and expiry are deterministic. Test data only.
 const NOW = new Date("2026-10-08T12:00:00Z");
 const MINUTE = 60_000;
-/** Default owner response window for requests. */
-const RESPONSE = 24 * 60 * MINUTE;
+/** How long an unpaid hold keeps the dates. */
+const HOLD = 30 * MINUTE;
 
 async function setupProperty(
   overrides: Partial<typeof properties.$inferInsert> = {},
@@ -91,7 +92,9 @@ beforeEach(async () => resetTables(db));
 afterEach(() => vi.unstubAllEnvs());
 
 describe("createHold", () => {
-  it("creates a priced request that holds the dates until the owner's deadline", async () => {
+  it("holds the dates for payment in full, with no approval step", async () => {
+    // The stored plan is a deposit, but instant booking always takes the
+    // full amount at booking.
     const property = await setupProperty();
     const result = await createHold(
       db,
@@ -100,9 +103,8 @@ describe("createHold", () => {
     expect(result.ok).toBe(true);
     if (!result.ok) return;
 
-    expect(result.kind).toBe("REQUEST");
     expect(result.quote.totalMinor).toBe(30_000);
-    expect(result.holdExpiresAt.toISOString()).toBe("2026-10-09T12:00:00.000Z");
+    expect(result.holdExpiresAt.toISOString()).toBe("2026-10-08T12:30:00.000Z");
     expect(result.publicRef).toMatch(/^LL-[A-HJ-NP-Z2-9]{6}$/);
 
     const schedule = await db
@@ -110,66 +112,78 @@ describe("createHold", () => {
       .from(paymentScheduleItems)
       .where(eq(paymentScheduleItems.reservationId, result.reservationId));
     expect(schedule.map((s) => [s.purpose, s.amountMinor, s.dueOn])).toEqual([
-      ["DEPOSIT", 9_000, "2026-10-08"],
-      ["BALANCE", 21_000, "2027-01-18"],
+      ["FULL", 30_000, "2026-10-08"],
     ]);
 
     const [row] = await db
       .select()
       .from(reservations)
       .where(eq(reservations.id, result.reservationId));
-    expect(row.status).toBe("REQUESTED");
-    expect(row.approvedAt).toBeNull();
+    expect(row.status).toBe("PENDING_PAYMENT");
+    expect(row.requestedAt.toISOString()).toBe(NOW.toISOString());
+    // The 24-hour window hasn't started: it starts at verified payment.
+    expect(row.confirmedAt).toBeNull();
+    expect(row.freeCancellationUntil).toBeNull();
+    expect(row.cancellationPolicy).toBe(
+      "FULL_REFUND_WITHIN_24H_OF_CONFIRMATION",
+    );
     expect(row.accessTokenHash).not.toBe(result.accessToken);
 
     const audits = await db
       .select()
       .from(auditLogs)
       .where(eq(auditLogs.targetId, result.reservationId));
-    expect(audits.map((a) => a.action)).toEqual([
-      "reservation.request_submitted",
-    ]);
-    const jobs = await db
-      .select()
-      .from(notificationJobs)
-      .where(eq(notificationJobs.reservationId, result.reservationId));
-    expect(jobs.map((j) => [j.template, j.recipientKind]).sort()).toEqual([
-      ["owner_new_request", "OWNER"],
-      ["request_received", "GUEST"],
-    ]);
-  });
-
-  it("uses the owner's configured response window", async () => {
-    const property = await setupProperty({ requestResponseHours: 48 });
-    const result = await createHold(
-      db,
-      input(property.id, "2027-03-01", "2027-03-04"),
-    );
-    if (!result.ok) throw new Error("expected request");
-    expect(result.holdExpiresAt.toISOString()).toBe("2026-10-10T12:00:00.000Z");
-  });
-
-  it("refuses instant bookings unless the owner has approved that mode", async () => {
-    const property = await setupProperty({ bookingMode: "INSTANT" });
-    vi.stubEnv("INSTANT_BOOKING_APPROVED", "false");
+    expect(audits.map((a) => a.action)).toEqual(["reservation.hold_created"]);
+    // Nothing is emailed until payment is verified.
     expect(
-      await createHold(db, input(property.id, "2027-03-01", "2027-03-04")),
-    ).toEqual({ ok: false, reason: "BOOKINGS_DISABLED" });
-    expect(await db.select().from(reservations)).toHaveLength(0);
+      await db
+        .select()
+        .from(notificationJobs)
+        .where(eq(notificationJobs.reservationId, result.reservationId)),
+    ).toHaveLength(0);
+  });
 
-    vi.stubEnv("INSTANT_BOOKING_APPROVED", "true");
+  it("lets the confirmation time and deadline be set once, consistently, and never moved", async () => {
+    const property = await setupProperty();
     const result = await createHold(
       db,
       input(property.id, "2027-03-01", "2027-03-04"),
     );
     if (!result.ok) throw new Error("expected hold");
-    expect(result.kind).toBe("INSTANT");
-    expect(result.holdExpiresAt.toISOString()).toBe("2026-10-08T12:30:00.000Z");
-    const [row] = await db
-      .select()
-      .from(reservations)
-      .where(eq(reservations.id, result.reservationId));
-    expect(row.status).toBe("PENDING_PAYMENT");
+    const byId = eq(reservations.id, result.reservationId);
+    const confirmedAt = new Date("2026-10-08T12:10:00Z");
+    // A deadline that isn't confirmed_at + 24 h is refused by the database.
+    await expect(
+      db
+        .update(reservations)
+        .set({
+          confirmedAt,
+          freeCancellationUntil: new Date("2026-10-09T12:00:00Z"),
+        })
+        .where(byId),
+    ).rejects.toThrow();
+    await db
+      .update(reservations)
+      .set({
+        confirmedAt,
+        freeCancellationUntil: new Date("2026-10-09T12:10:00Z"),
+      })
+      .where(byId);
+    for (const change of [
+      { requestedAt: new Date() },
+      { confirmedAt: new Date("2026-10-08T14:00:00Z") },
+      { confirmedAt: null },
+      { freeCancellationUntil: new Date("2030-01-01T00:00:00Z") },
+      { freeCancellationUntil: null },
+      { cancellationPolicy: "SOMETHING_ELSE" },
+    ])
+      await expect(
+        db.update(reservations).set(change).where(byId),
+      ).rejects.toThrow();
+    const [row] = await db.select().from(reservations).where(byId);
+    expect(row.freeCancellationUntil?.toISOString()).toBe(
+      "2026-10-09T12:10:00.000Z",
+    );
   });
 
   it("lets the guest find the booking only with the right token", async () => {
@@ -219,7 +233,7 @@ describe("createHold", () => {
     ).toBe(true);
   });
 
-  it("treats an expired request as free and marks it EXPIRED", async () => {
+  it("treats an expired hold as free and marks it EXPIRED", async () => {
     const property = await setupProperty();
     const first = await createHold(
       db,
@@ -227,7 +241,7 @@ describe("createHold", () => {
     );
     if (!first.ok) throw new Error("expected hold");
 
-    const later = new Date(NOW.getTime() + RESPONSE + MINUTE);
+    const later = new Date(NOW.getTime() + HOLD + MINUTE);
     const second = await createHold(
       db,
       input(property.id, "2027-03-01", "2027-03-04", { now: later }),
@@ -241,10 +255,10 @@ describe("createHold", () => {
     expect(old.status).toBe("EXPIRED");
   });
 
-  it("does not free a request before it expires", async () => {
+  it("does not free a hold before it expires", async () => {
     const property = await setupProperty();
     await createHold(db, input(property.id, "2027-03-01", "2027-03-04"));
-    const almost = new Date(NOW.getTime() + RESPONSE - MINUTE);
+    const almost = new Date(NOW.getTime() + HOLD - MINUTE);
     expect(
       await createHold(
         db,
@@ -280,6 +294,9 @@ describe("createHold", () => {
         provider: "AIRBNB_ICAL",
         direction: "IMPORT",
         label: "Airbnb",
+        // Freshly synced: the stale-calendar stop doesn't apply.
+        syncStatus: "OK",
+        lastSuccessAt: NOW,
       })
       .returning();
     await db.insert(externalBusyPeriods).values({
@@ -357,7 +374,7 @@ describe("createHold", () => {
     });
   });
 
-  it("lets exactly one of many simultaneous overlapping requests succeed", async () => {
+  it("lets exactly one of many simultaneous overlapping bookings succeed", async () => {
     const property = await setupProperty();
     const attempts = 12;
     const results = await Promise.all(
@@ -376,7 +393,7 @@ describe("createHold", () => {
 });
 
 describe("expireLapsedHolds", () => {
-  it("expires only lapsed requests, audits and notifies once", async () => {
+  it("expires only lapsed holds, and audits once", async () => {
     const property = await setupProperty();
     const a = await createHold(
       db,
@@ -390,7 +407,7 @@ describe("expireLapsedHolds", () => {
     );
     if (!a.ok || !b.ok) throw new Error("expected holds");
 
-    const at = new Date(NOW.getTime() + RESPONSE + 5 * MINUTE);
+    const at = new Date(NOW.getTime() + HOLD + 5 * MINUTE);
     const expired = await expireLapsedHolds(db, null, at);
     expect(expired).toEqual([a.reservationId]);
     expect(await expireLapsedHolds(db, null, at)).toEqual([]);
@@ -399,21 +416,10 @@ describe("expireLapsedHolds", () => {
       .select()
       .from(auditLogs)
       .where(eq(auditLogs.targetId, a.reservationId));
-    expect(audits.map((x) => x.action)).toContain(
-      "reservation.request_expired",
-    );
-    const jobs = await db
-      .select({ template: notificationJobs.template })
-      .from(notificationJobs)
-      .where(eq(notificationJobs.reservationId, a.reservationId));
-    expect(jobs.map((j) => j.template).sort()).toEqual(
-      [
-        "owner_new_request",
-        "owner_request_expired",
-        "request_expired",
-        "request_received",
-      ].sort(),
-    );
+    expect(audits.map((x) => x.action)).toEqual([
+      "reservation.hold_created",
+      "reservation.hold_expired",
+    ]);
   });
 });
 
@@ -433,9 +439,10 @@ describe("owner blocks", () => {
         startsOn: d("2027-03-02"),
         endsOn: d("2027-03-05"),
       }),
-    ).toEqual({
+    ).toMatchObject({
       ok: false,
       reason: "CONFLICTS_WITH_BOOKING",
+      bookings: [{ checkIn: "2027-03-01", checkOut: "2027-03-04" }],
     });
     const ok = await createOwnerBlock(db, {
       ...base,
@@ -451,6 +458,182 @@ describe("owner blocks", () => {
     expect(await removeOwnerBlock(db, ok.id, "owner@example.test")).toBe(false);
     expect(
       (await createHold(db, input(property.id, "2027-03-05", "2027-03-07"))).ok,
+    ).toBe(true);
+  });
+});
+
+describe("owner block lifecycle", () => {
+  const base = (propertyId: string) => ({
+    propertyId,
+    createdBy: "owner@example.test",
+    now: NOW,
+  });
+
+  it("edits a block, refusing a range that would cover a booking, and audits every step", async () => {
+    const property = await setupProperty();
+    const hold = await createHold(
+      db,
+      input(property.id, "2027-03-10", "2027-03-12"),
+    );
+    if (!hold.ok) throw new Error("expected hold");
+    const block = await createOwnerBlock(db, {
+      ...base(property.id),
+      startsOn: d("2027-03-01"),
+      endsOn: d("2027-03-05"),
+      reason: "Family",
+    });
+    if (!block.ok) throw new Error("expected block");
+
+    const edit = (startsOn: string, endsOn: string, reason: string | null) =>
+      updateOwnerBlock(db, {
+        propertyId: property.id,
+        id: block.id,
+        startsOn: d(startsOn),
+        endsOn: d(endsOn),
+        reason,
+        actor: "owner@example.test",
+        now: NOW,
+      });
+    expect(await edit("2027-03-01", "2027-03-11", "Family")).toMatchObject({
+      ok: false,
+      reason: "CONFLICTS_WITH_BOOKING",
+      bookings: [{ publicRef: hold.publicRef }],
+    });
+    expect(await edit("2027-03-02", "2027-03-08", "Painting")).toEqual({
+      ok: true,
+      id: block.id,
+    });
+    expect(await edit("2027-03-08", "2027-03-02", null)).toEqual({
+      ok: false,
+      reason: "INVALID_RANGE",
+    });
+    expect(await removeOwnerBlock(db, block.id, "owner@example.test")).toBe(
+      true,
+    );
+    expect(await edit("2027-03-02", "2027-03-08", null)).toEqual({
+      ok: false,
+      reason: "NOT_FOUND",
+    });
+
+    const audits = await db
+      .select()
+      .from(auditLogs)
+      .where(eq(auditLogs.targetId, block.id))
+      .orderBy(auditLogs.createdAt);
+    expect(audits.map((a) => a.action)).toEqual([
+      "owner_block.created",
+      "owner_block.updated",
+      "owner_block.removed",
+    ]);
+    expect(audits[1].metadata).toEqual({
+      before: {
+        startsOn: "2027-03-01",
+        endsOn: "2027-03-05",
+        reason: "Family",
+      },
+      after: {
+        startsOn: "2027-03-02",
+        endsOn: "2027-03-08",
+        reason: "Painting",
+      },
+    });
+    expect(audits[2].actorId).toBe("owner@example.test");
+  });
+
+  it("lets an Airbnb import and an owner block overlap (both just block)", async () => {
+    const property = await setupProperty();
+    const [source] = await db
+      .insert(externalCalendarSources)
+      .values({
+        propertyId: property.id,
+        provider: "AIRBNB_ICAL",
+        direction: "IMPORT",
+        label: "Airbnb",
+      })
+      .returning();
+    await db.insert(externalBusyPeriods).values({
+      sourceId: source.id,
+      propertyId: property.id,
+      externalUid: "uid-2@airbnb.test",
+      startsOn: "2027-05-10",
+      endsOn: "2027-05-12",
+      contentHash: "h",
+    });
+    expect(
+      (
+        await createOwnerBlock(db, {
+          ...base(property.id),
+          startsOn: d("2027-05-09"),
+          endsOn: d("2027-05-11"),
+          reason: null,
+        })
+      ).ok,
+    ).toBe(true);
+  });
+
+  it("does not treat a lapsed hold as a booking in the way", async () => {
+    const property = await setupProperty();
+    await createHold(db, input(property.id, "2027-03-01", "2027-03-04"));
+    expect(
+      (
+        await createOwnerBlock(db, {
+          ...base(property.id),
+          now: new Date(NOW.getTime() + HOLD + MINUTE),
+          startsOn: d("2027-03-01"),
+          endsOn: d("2027-03-04"),
+          reason: null,
+        })
+      ).ok,
+    ).toBe(true);
+  });
+});
+
+describe("stale imported calendars (safety stop)", () => {
+  const addSource = (
+    propertyId: string,
+    values: Partial<typeof externalCalendarSources.$inferInsert>,
+  ) =>
+    db.insert(externalCalendarSources).values({
+      propertyId,
+      provider: "AIRBNB_ICAL",
+      direction: "IMPORT",
+      label: "Airbnb",
+      ...values,
+    });
+
+  it("takes no new holds while an import has never synced or is past its stale window", async () => {
+    const never = await setupProperty();
+    await addSource(never.id, {});
+    expect(
+      await createHold(db, input(never.id, "2027-03-01", "2027-03-04")),
+    ).toEqual({ ok: false, reason: "CALENDAR_STALE" });
+
+    const old = await setupProperty();
+    await addSource(old.id, {
+      syncStatus: "ERROR",
+      lastSuccessAt: new Date(NOW.getTime() - 61 * MINUTE),
+      staleAfterMinutes: 60,
+    });
+    expect(
+      await createHold(db, input(old.id, "2027-03-01", "2027-03-04")),
+    ).toEqual({ ok: false, reason: "CALENDAR_STALE" });
+    expect(await db.select().from(reservations)).toHaveLength(0);
+  });
+
+  it("still books when one poll failed but the last good import is recent, or the source is switched off", async () => {
+    const recent = await setupProperty();
+    await addSource(recent.id, {
+      syncStatus: "ERROR",
+      lastSuccessAt: new Date(NOW.getTime() - 10 * MINUTE),
+    });
+    expect(
+      (await createHold(db, input(recent.id, "2027-03-01", "2027-03-04"))).ok,
+    ).toBe(true);
+
+    const off = await setupProperty();
+    await addSource(off.id, { enabled: false });
+    expect(
+      (await createHold(db, input(off.id, "2027-03-01", "2027-03-04"))).ok,
     ).toBe(true);
   });
 });

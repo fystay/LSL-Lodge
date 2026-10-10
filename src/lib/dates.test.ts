@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  zonedLocalTimeToUtc,
   addDays,
   daysBetween,
   eachNight,
@@ -112,5 +113,33 @@ describe("formatting", () => {
   it("computes ISO weekdays", () => {
     expect(isoWeekday(d("2026-10-05"))).toBe(1); // Monday
     expect(isoWeekday(d("2026-10-11"))).toBe(7); // Sunday
+  });
+});
+
+describe("zonedLocalTimeToUtc", () => {
+  it("converts UK wall-clock time in summer and winter", () => {
+    expect(
+      zonedLocalTimeToUtc("2026-10-10T14:32", "Europe/London")?.toISOString(),
+    ).toBe("2026-10-10T13:32:00.000Z");
+    expect(
+      zonedLocalTimeToUtc("2026-12-01T09:00", "Europe/London")?.toISOString(),
+    ).toBe("2026-12-01T09:00:00.000Z");
+  });
+
+  it("uses the earlier instant when the clocks go back, and rejects skipped times", () => {
+    expect(
+      zonedLocalTimeToUtc("2026-10-25T01:30", "Europe/London")?.toISOString(),
+    ).toBe("2026-10-25T00:30:00.000Z");
+    expect(zonedLocalTimeToUtc("2027-03-28T01:30", "Europe/London")).toBeNull();
+  });
+
+  it("rejects malformed input", () => {
+    for (const bad of [
+      "",
+      "2026-10-10",
+      "2026-02-30T10:00",
+      "2026-10-10 10:00",
+    ])
+      expect(zonedLocalTimeToUtc(bad, "Europe/London")).toBeNull();
   });
 });

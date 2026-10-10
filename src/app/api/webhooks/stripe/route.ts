@@ -1,6 +1,11 @@
 import { db, isDatabaseConfigured } from "@/server/db/client";
 import { stripeEnv } from "@/server/env";
-import { getStripe, paymentsConfigured } from "@/server/payments/gateway";
+import {
+  getPaymentGateway,
+  getStripe,
+  paymentsConfigured,
+} from "@/server/payments/gateway";
+import { processPendingRefunds } from "@/server/payments/refunds";
 import { processStripeEvent } from "@/server/payments/webhook";
 import {
   verifyStripeWebhook,
@@ -43,6 +48,15 @@ export async function POST(request: Request) {
       handled: outcome.handled,
       outcome: "outcome" in outcome ? outcome.outcome : undefined,
     });
+    // A payment that isn't owed (duplicate, or for a cancelled booking) is
+    // queued for refund while processing; send it now rather than waiting
+    // for the job. Best effort: the process-refunds job retries anything left.
+    if ("outcome" in outcome && outcome.outcome === "REFUND_REQUIRED")
+      await processPendingRefunds(db(), getPaymentGateway()).catch(() => {
+        console.error("stripe.webhook_refund_send_failed", {
+          eventId: event.id,
+        });
+      });
     return Response.json({ received: true });
   } catch {
     console.error("stripe.webhook_failed", {

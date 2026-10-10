@@ -70,7 +70,7 @@ try {
         amountMinor: 6_000,
         taxTreatment: "UNCONFIRMED",
       });
-      // Full payment after approval: the owner's chosen model. Amounts above
+      // Full payment when booking (instant booking). Amounts above
       // are still placeholders.
       await tx.insert(schema.paymentPolicies).values({
         propertyId: property.id,

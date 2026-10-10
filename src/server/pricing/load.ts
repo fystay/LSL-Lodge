@@ -88,7 +88,11 @@ export async function loadPricingInputs(
     policy: policies[0]
       ? {
           id: policies[0].id,
-          mode: policies[0].mode,
+          // Instant booking takes the full amount at booking (owner's
+          // requirement, October 2026). Deposit plans stay in the data model
+          // but are not offered; the stored policy's id and version are still
+          // recorded on each quote.
+          mode: "FULL" as const,
           depositBasisPoints: policies[0].depositBasisPoints,
           depositFixedMinor: policies[0].depositFixedMinor,
           minimumDepositMinor: policies[0].minimumDepositMinor,

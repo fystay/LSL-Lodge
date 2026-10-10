@@ -120,7 +120,7 @@ test("hero slideshow can be paused and slides chosen directly", async ({
   await expect(
     carousel.getByRole("button", { name: /Show photo 2 of 4/ }),
   ).toHaveAttribute("aria-current", "true");
-  await expect(carousel).toContainText("Evenings on the deck");
+  await expect(carousel).toContainText("Living and dining");
 });
 
 test("hero slideshow never autoplays for visitors who prefer reduced motion", async ({
@@ -197,6 +197,60 @@ test("section links underline the section you are in", async ({ page }) => {
     "aria-current",
     "location",
   );
+});
+
+test("the section bar stays pinned under the header and tapped sections clear it", async ({
+  page,
+}) => {
+  await page.goto("/stay");
+  const nav = page.getByRole("navigation", { name: "On this page" });
+  const header = page.locator("#site-header");
+  for (const label of ["Kitchen", "Outside", "Details"]) {
+    await nav.getByRole("link", { name: label }).click();
+    await expect(nav.getByRole("link", { name: label })).toHaveAttribute(
+      "aria-current",
+      "location",
+    );
+    // Pinned flush under the header...
+    await expect
+      .poll(async () => {
+        const [h, n] = await Promise.all([
+          header.boundingBox(),
+          nav.boundingBox(),
+        ]);
+        return Math.round(n!.y - (h!.y + h!.height));
+      })
+      .toBe(0);
+    // ...and the section's heading lands below it, not underneath.
+    const id =
+      label === "Details" ? "details-title" : `${label.toLowerCase()}-title`;
+    await expect
+      .poll(async () => {
+        const [n, t] = await Promise.all([
+          nav.boundingBox(),
+          page.locator(`#${id}`).boundingBox(),
+        ]);
+        return t!.y >= n!.y + n!.height;
+      })
+      .toBe(true);
+  }
+});
+
+test("the section bar swipes sideways to reveal every label", async ({
+  page,
+  isMobile,
+}) => {
+  test.skip(!isMobile, "mobile layout only");
+  await page.goto("/stay");
+  const list = page
+    .getByRole("navigation", { name: "On this page" })
+    .locator("ul");
+  await list.evaluate((ul) => ul.scrollTo({ left: ul.scrollWidth }));
+  const details = list.getByRole("link", { name: "Details" });
+  const box = await details.boundingBox();
+  const width = page.viewportSize()!.width;
+  expect(box!.x).toBeGreaterThanOrEqual(0);
+  expect(box!.x + box!.width).toBeLessThanOrEqual(width);
 });
 
 test("the last section is underlined at the bottom of the page", async ({

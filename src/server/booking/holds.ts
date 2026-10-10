@@ -12,25 +12,27 @@ import {
   reservations,
 } from "@/server/db/schema";
 import {
-  enqueueForReservation,
-  type NotificationTemplate,
-} from "@/server/notifications/outbox";
-import {
   calculateQuote,
   type Quote,
   type QuoteError,
 } from "@/server/pricing/quote";
 import { loadPricingInputs } from "@/server/pricing/load";
+import { staleImportSources } from "@/server/calendar/sync";
 import { conflictingBlocks, loadBlocks, type Block } from "./availability";
 import {
   guestLinkSecret,
   looksLikeGuestLink,
   verifyGuestLink,
 } from "./guest-link";
-import { effectiveBookingMode } from "./mode";
+import { CANCELLATION_POLICY } from "./cancellation-policy";
 import { EXPIRING_STATUSES } from "./reservation-state";
 
-/** Instant mode only: how long a guest has to complete payment before the hold lapses. */
+/**
+ * How long the dates are held while the guest pays (the figure the existing
+ * booking pages state). Stripe Checkout sessions must stay open at least 30
+ * minutes, so starting Checkout extends the hold just enough to cover the
+ * session; a session never outlives its hold (src/server/payments/checkout.ts).
+ */
 export const HOLD_MINUTES = 30;
 
 export interface HoldInput {
@@ -47,19 +49,23 @@ export interface HoldInput {
 export type HoldResult =
   | {
       ok: true;
-      /** REQUEST: awaiting the owner. INSTANT: awaiting payment. */
-      kind: "REQUEST" | "INSTANT";
       reservationId: string;
       publicRef: string;
       /** Bearer secret for the guest's booking page. Only its hash is stored. */
       accessToken: string;
       holdExpiresAt: Date;
+      /** Full refund if cancelled strictly before this (24 h from now). */
       quote: Quote;
       replayed: boolean;
     }
   | {
       ok: false;
-      reason: "BOOKINGS_DISABLED" | "NOT_CONFIGURED" | "IDEMPOTENCY_MISMATCH";
+      reason:
+        | "BOOKINGS_DISABLED"
+        | "NOT_CONFIGURED"
+        | "IDEMPOTENCY_MISMATCH"
+        /** An imported calendar is out of date: no new holds (safety stop). */
+        | "CALENDAR_STALE";
     }
   | {
       ok: false;
@@ -82,18 +88,19 @@ export function generatePublicRef(): string {
 }
 
 /**
- * Holds the dates for a guest, atomically. In REQUEST mode (the default) this
- * is a booking request that holds the dates until the owner's response
- * deadline; nothing is charged. In INSTANT mode (disabled unless approved) it
- * is a short payment hold.
+ * Instant booking, step 1: holds the dates while the guest pays in full.
+ * Nothing is confirmed here; only a verified payment confirms
+ * (src/server/payments/checkout.ts). This moment is the "booking request"
+ * that starts the 24-hour free-cancellation window.
  *
  * Inside one transaction: lock the property row (serialising all booking
  * writes for the property), replay an earlier attempt with the same
- * idempotency key, expire lapsed requests and holds, re-check every source of
- * unavailability including the turnover buffer, price the stay from the
- * current rules, then insert the reservation, its payment schedule, an audit
- * entry and the notification jobs. The exclusion constraint backstops the
- * overlap check.
+ * idempotency key, expire lapsed holds, re-check every source of
+ * unavailability (bookings, live holds, owner blocks, imported Airbnb and
+ * Google periods, the turnover buffer), price the stay from the current
+ * rules, then insert the hold, its payment schedule and an audit entry. The
+ * exclusion constraint and the owner-block trigger are the database
+ * backstops.
  */
 export async function createHold(
   db: Database,
@@ -110,13 +117,16 @@ export async function createHold(
       if (!property) return { ok: false, reason: "NOT_CONFIGURED" } as const;
       if (!property.bookingsEnabled)
         return { ok: false, reason: "BOOKINGS_DISABLED" } as const;
-      const mode = effectiveBookingMode(property.bookingMode);
-      if (!mode) return { ok: false, reason: "BOOKINGS_DISABLED" } as const;
 
       const replay = await replayHold(tx, input);
       if (replay) return replay;
 
       await expireLapsedHolds(tx, property.id, now);
+
+      // Safety stop: while Airbnb (or another import) is out of date we
+      // can't see its latest bookings, so no new dates are held.
+      if ((await staleImportSources(tx, property.id, now)).length > 0)
+        return { ok: false, reason: "CALENDAR_STALE" } as const;
 
       const stay = { start: input.checkIn, end: input.checkOut };
       const blocks = await loadBlocks(
@@ -162,16 +172,14 @@ export async function createHold(
         return { ok: false, reason: "QUOTE", error: priced.error } as const;
 
       const accessToken = randomBytes(32).toString("base64url");
-      const holdMinutes =
-        mode === "REQUEST" ? property.requestResponseHours * 60 : HOLD_MINUTES;
-      const holdExpiresAt = new Date(now.getTime() + holdMinutes * 60_000);
+      const holdExpiresAt = new Date(now.getTime() + HOLD_MINUTES * 60_000);
       const [row] = await tx
         .insert(reservations)
         .values({
           publicRef: generatePublicRef(),
           propertyId: property.id,
           source: "DIRECT",
-          status: mode === "REQUEST" ? "REQUESTED" : "PENDING_PAYMENT",
+          status: "PENDING_PAYMENT",
           checkIn: input.checkIn,
           checkOut: input.checkOut,
           guests: input.guests,
@@ -182,6 +190,9 @@ export async function createHold(
           totalMinor: priced.quote.totalMinor,
           quoteSnapshot: priced.quote,
           holdExpiresAt,
+          requestedAt: now,
+          // No deadline yet: the 24 hours start at verified payment.
+          cancellationPolicy: CANCELLATION_POLICY.id,
           idempotencyKey: input.idempotencyKey,
           accessTokenHash: hashToken(accessToken),
         })
@@ -199,27 +210,18 @@ export async function createHold(
 
       await tx.insert(auditLogs).values({
         actorType: "GUEST",
-        action:
-          mode === "REQUEST"
-            ? "reservation.request_submitted"
-            : "reservation.hold_created",
+        action: "reservation.hold_created",
         targetType: "reservation",
         targetId: row.id,
         metadata: {
           nights: priced.quote.nights,
           totalMinor: priced.quote.totalMinor,
-          holdMinutes,
+          holdMinutes: HOLD_MINUTES,
         },
       });
-      if (mode === "REQUEST")
-        await enqueueForReservation(tx, row.id, [
-          "request_received",
-          "owner_new_request",
-        ]);
 
       return {
         ok: true,
-        kind: mode,
         reservationId: row.id,
         publicRef: row.publicRef,
         accessToken,
@@ -267,7 +269,6 @@ async function replayHold(
     .where(eq(reservations.id, existing.id));
   return {
     ok: true,
-    kind: existing.status === "PENDING_PAYMENT" ? "INSTANT" : "REQUEST",
     reservationId: existing.id,
     publicRef: existing.publicRef,
     accessToken,
@@ -276,13 +277,6 @@ async function replayHold(
     replayed: true,
   };
 }
-
-const EXPIRY_NOTICES: Partial<
-  Record<(typeof EXPIRING_STATUSES)[number], NotificationTemplate[]>
-> = {
-  REQUESTED: ["request_expired", "owner_request_expired"],
-  APPROVED: ["payment_window_expired"],
-};
 
 /**
  * Marks lapsed requests, approvals and holds EXPIRED, freeing their dates.
@@ -330,9 +324,6 @@ export async function expireLapsedHolds(
         targetType: "reservation",
         targetId: row.id,
       });
-      const notices =
-        EXPIRY_NOTICES[row.status as keyof typeof EXPIRY_NOTICES] ?? [];
-      await enqueueForReservation(tx, row.id, notices);
     }
     return expired;
   });
@@ -373,13 +364,69 @@ export async function findReservationForGuest(
 
 // --- Owner blocks --------------------------------------------------------------
 
+export interface ClashingBooking {
+  id: string;
+  publicRef: string;
+  status: string;
+  checkIn: string;
+  checkOut: string;
+}
+
 export type OwnerBlockResult =
   | { ok: true; id: string }
-  | { ok: false; reason: "INVALID_RANGE" | "CONFLICTS_WITH_BOOKING" };
+  | { ok: false; reason: "INVALID_RANGE" | "NOT_FOUND" }
+  | {
+      ok: false;
+      reason: "CONFLICTS_WITH_BOOKING";
+      /** The bookings in the way, so the owner can resolve them first. */
+      bookings: ClashingBooking[];
+    };
+
+/**
+ * Bookings (confirmed, under review, or a hold that hasn't lapsed) whose
+ * nights overlap [start, end). Owner blocks never cover these: the owner
+ * must cancel or move the booking first, through its own workflow.
+ */
+async function bookingsInRange(
+  tx: Executor,
+  propertyId: string,
+  range: { start: IsoDate; end: IsoDate },
+  now: Date,
+): Promise<ClashingBooking[]> {
+  return tx
+    .select({
+      id: reservations.id,
+      publicRef: reservations.publicRef,
+      status: reservations.status,
+      checkIn: reservations.checkIn,
+      checkOut: reservations.checkOut,
+    })
+    .from(reservations)
+    .where(
+      and(
+        eq(reservations.propertyId, propertyId),
+        sql`${reservations.stay} && daterange(${range.start}::date, ${range.end}::date, '[)')`,
+        sql`(${reservations.status} IN ('CONFIRMED', 'PAYMENT_DUE', 'REQUIRES_REVIEW')
+          OR (${reservations.status} IN ('PENDING_PAYMENT', 'REQUESTED', 'APPROVED')
+              AND ${reservations.holdExpiresAt} > ${now.toISOString()}::timestamptz))`,
+      ),
+    )
+    .orderBy(reservations.checkIn)
+    .limit(20);
+}
+
+const lockProperty = (tx: Executor, propertyId: string) =>
+  tx
+    .select({ id: properties.id })
+    .from(properties)
+    .where(eq(properties.id, propertyId))
+    .for("update");
 
 /**
  * Blocks dates for the owner. Refuses to cover an existing booking or live
- * hold (cancel that first); overlapping external busy periods is fine.
+ * hold (resolve that first; nothing is cancelled or changed silently).
+ * Overlapping external busy periods is fine. The database trigger
+ * `owner_blocks_refuse_booking_overlap` enforces the same rule.
  */
 export async function createOwnerBlock(
   db: Database,
@@ -395,28 +442,16 @@ export async function createOwnerBlock(
   if (input.endsOn <= input.startsOn)
     return { ok: false, reason: "INVALID_RANGE" };
   const now = input.now ?? new Date();
+  const range = { start: input.startsOn, end: input.endsOn };
   return db.transaction(async (tx) => {
-    await tx
-      .select({ id: properties.id })
-      .from(properties)
-      .where(eq(properties.id, input.propertyId))
-      .for("update");
-    const blocks = await loadBlocks(
-      tx,
-      input.propertyId,
-      { start: input.startsOn, end: input.endsOn },
-      0,
-      now,
-    );
-    const clash = conflictingBlocks(
-      blocks.filter(
-        (b) => b.source === "DIRECT_BOOKING" || b.source === "HOLD",
-      ),
-      { start: input.startsOn, end: input.endsOn },
-      0,
-    );
+    await lockProperty(tx, input.propertyId);
+    const clash = await bookingsInRange(tx, input.propertyId, range, now);
     if (clash.length > 0)
-      return { ok: false, reason: "CONFLICTS_WITH_BOOKING" } as const;
+      return {
+        ok: false,
+        reason: "CONFLICTS_WITH_BOOKING",
+        bookings: clash,
+      } as const;
 
     const [row] = await tx
       .insert(ownerBlocks)
@@ -434,12 +469,94 @@ export async function createOwnerBlock(
       action: "owner_block.created",
       targetType: "owner_block",
       targetId: row.id,
-      metadata: { startsOn: input.startsOn, endsOn: input.endsOn },
+      metadata: {
+        startsOn: input.startsOn,
+        endsOn: input.endsOn,
+        reason: input.reason,
+      },
     });
     return { ok: true, id: row.id } as const;
   });
 }
 
+/**
+ * Changes a block's dates or label. The new range is checked like a new
+ * block (the old range is released in the same transaction). Audited with
+ * the before and after values.
+ */
+export async function updateOwnerBlock(
+  db: Database,
+  input: {
+    propertyId: string;
+    id: string;
+    startsOn: IsoDate;
+    endsOn: IsoDate;
+    reason: string | null;
+    actor: string;
+    now?: Date;
+  },
+): Promise<OwnerBlockResult> {
+  if (input.endsOn <= input.startsOn)
+    return { ok: false, reason: "INVALID_RANGE" };
+  const now = input.now ?? new Date();
+  return db.transaction(async (tx) => {
+    await lockProperty(tx, input.propertyId);
+    const [before] = await tx
+      .select()
+      .from(ownerBlocks)
+      .where(
+        and(
+          eq(ownerBlocks.id, input.id),
+          eq(ownerBlocks.propertyId, input.propertyId),
+          sql`${ownerBlocks.removedAt} IS NULL`,
+        ),
+      )
+      .for("update");
+    if (!before) return { ok: false, reason: "NOT_FOUND" } as const;
+    const clash = await bookingsInRange(
+      tx,
+      input.propertyId,
+      { start: input.startsOn, end: input.endsOn },
+      now,
+    );
+    if (clash.length > 0)
+      return {
+        ok: false,
+        reason: "CONFLICTS_WITH_BOOKING",
+        bookings: clash,
+      } as const;
+    await tx
+      .update(ownerBlocks)
+      .set({
+        startsOn: input.startsOn,
+        endsOn: input.endsOn,
+        reason: input.reason,
+      })
+      .where(eq(ownerBlocks.id, input.id));
+    await tx.insert(auditLogs).values({
+      actorType: "OWNER",
+      actorId: input.actor,
+      action: "owner_block.updated",
+      targetType: "owner_block",
+      targetId: input.id,
+      metadata: {
+        before: {
+          startsOn: before.startsOn,
+          endsOn: before.endsOn,
+          reason: before.reason,
+        },
+        after: {
+          startsOn: input.startsOn,
+          endsOn: input.endsOn,
+          reason: input.reason,
+        },
+      },
+    });
+    return { ok: true, id: input.id } as const;
+  });
+}
+
+/** Unblocks dates (soft delete, so the history stays). Audited. */
 export async function removeOwnerBlock(
   db: Database,
   id: string,
@@ -451,7 +568,12 @@ export async function removeOwnerBlock(
       .update(ownerBlocks)
       .set({ removedAt: now })
       .where(and(eq(ownerBlocks.id, id), sql`${ownerBlocks.removedAt} IS NULL`))
-      .returning({ id: ownerBlocks.id });
+      .returning({
+        id: ownerBlocks.id,
+        startsOn: ownerBlocks.startsOn,
+        endsOn: ownerBlocks.endsOn,
+        reason: ownerBlocks.reason,
+      });
     if (!row) return false;
     await tx.insert(auditLogs).values({
       actorType: "OWNER",
@@ -459,6 +581,11 @@ export async function removeOwnerBlock(
       action: "owner_block.removed",
       targetType: "owner_block",
       targetId: id,
+      metadata: {
+        startsOn: row.startsOn,
+        endsOn: row.endsOn,
+        reason: row.reason,
+      },
     });
     return true;
   });
