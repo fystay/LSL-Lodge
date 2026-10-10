@@ -1,6 +1,6 @@
 # Staging setup (customer demo)
 
-Status: 10 October 2026, 16:00 UTC. **Usable without payments.** The
+Status: 10 October 2026, 17:15 UK. **Usable, payments in Stripe test mode.** The
 Lodge's staging database lives in the owner-authorised Supabase project
 `lsllodge` (`sqkpixwvugrxllrxlexs`), isolated in schema `lodge` (§1), with
 migrations 0000–0010 applied, demo data seeded and a demo owner
@@ -9,9 +9,20 @@ branch's Preview variables are set (a branch-scoped
 `CREDENTIALS_ENCRYPTION_KEY` overrides the all-Preview one, which wasn't a
 valid key). Verified on the Preview: search, quotes, holds, overlap refusal,
 owner sign-in with TOTP, owner blocks (and refusal over a booking), the
-seven background tasks, `/api/health` and `/api/jobs/tick`. Still missing:
-the Lodge Stripe sandbox (§2), so payment, webhooks and refunds are untested
-there.
+seven background tasks, `/api/health` and `/api/jobs/tick`.
+
+Stripe (10 October 2026, 17:15 UK): the "Lodge on the Lake staging" sandbox
+(`acct_1UP1oSCwmOwyxj64`, test mode) has one webhook endpoint
+(`we_1UP2jOCwmOwyxj64eCl2nkad`, the seven events in
+`src/server/payments/stripe-config.ts`, API `2026-09-30.endive`) pointing at
+the branch address with Vercel's automation-bypass token. Verified on the
+Preview with test cards: a 4242 payment confirmed the booking via the signed
+webhook; a declined card (…0002) left the booking unconfirmed; a tampered
+event got 400; the same event delivered three times at once and again later
+was applied once; a guest cancellation inside 24 hours refunded the full
+£510 automatically (refund webhooks processed, booking REFUNDED, dates
+released). Not exercised on the Preview: the no-refund case after 24 hours
+(unit-tested) and asynchronous payment methods.
 Nothing here touches production (lsllodge.vercel.app), the other
 application's tables in that project, or the other app's Stripe sandbox.
 
