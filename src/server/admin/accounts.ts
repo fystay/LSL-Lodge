@@ -365,33 +365,59 @@ async function checkSecondFactor(
   return null;
 }
 
+/** A completed sign-in step is recognised for this long (duplicate taps). */
+export const COMPLETED_GRACE_MS = 2 * 60_000;
+
 /**
  * Step 2. Verifies the second factor for a pending session and replaces it
  * with a fresh, fully authenticated session (new token: the pre-MFA token
  * stops working).
+ *
+ * The pending session row is locked for the whole check, so duplicate
+ * submissions of the same sign-in (a double tap on a phone) run one after
+ * the other: the first signs in; a duplicate then finds the step already
+ * completed and gets ALREADY_COMPLETED, not "expired" and not a failed
+ * attempt. The code itself is still single-use (replay guard unchanged).
  */
 export async function completeSecondFactor(
   db: Database,
   input: { pendingToken: string; code: string; now?: Date },
   keys: CredentialKey[],
 ): Promise<
-  { ok: true; token: string } | { ok: false; reason: "INVALID" | "EXPIRED" }
+  | { ok: true; token: string }
+  | { ok: false; reason: "INVALID" | "EXPIRED" | "ALREADY_COMPLETED" }
 > {
   const now = input.now ?? new Date();
-  const found = await loadSession(db, input.pendingToken, now, {
-    allowPending: true,
-  });
-  if (!found || found.session.mfaVerifiedAt)
+  if (!input.pendingToken || input.pendingToken.length > 100)
     return { ok: false, reason: "EXPIRED" };
-  const { session, user } = found;
-  const method = await checkSecondFactor(db, user, input.code, keys, now);
-  if (!method) return { ok: false, reason: "INVALID" };
+  return db.transaction(async (tx) => {
+    const [locked] = await tx
+      .select()
+      .from(adminSessions)
+      .where(eq(adminSessions.tokenHash, sha256(input.pendingToken)))
+      .for("update");
+    if (!locked) return { ok: false, reason: "EXPIRED" } as const;
+    if (
+      locked.revokedAt &&
+      locked.completedAt &&
+      now.getTime() - locked.revokedAt.getTime() < COMPLETED_GRACE_MS
+    )
+      return { ok: false, reason: "ALREADY_COMPLETED" } as const;
+    const found = await loadSession(tx, input.pendingToken, now, {
+      allowPending: true,
+    });
+    if (!found || found.session.mfaVerifiedAt)
+      return { ok: false, reason: "EXPIRED" } as const;
+    const { session, user } = found;
+    const method = await checkSecondFactor(tx, user, input.code, keys, now);
+    if (!method) return { ok: false, reason: "INVALID" } as const;
 
-  const token = randomToken();
-  await db.transaction(async (tx) => {
+    const token = randomToken();
+    // The pending session is closed and marked completed (completedAt), so
+    // a duplicate submission can be told apart from an expired one.
     await tx
       .update(adminSessions)
-      .set({ revokedAt: now })
+      .set({ revokedAt: now, completedAt: now })
       .where(eq(adminSessions.id, session.id));
     await tx.insert(adminSessions).values({
       userId: user.id,
@@ -410,8 +436,8 @@ export async function completeSecondFactor(
       await audit(tx, "admin.recovery_code_used", user.id, user.email, {
         remaining: (user.recoveryCodeHashes?.length ?? 1) - 1,
       });
+    return { ok: true, token } as const;
   });
-  return { ok: true, token };
 }
 
 /** Re-enters the second factor for a signed-in session (step-up for sensitive actions). */
@@ -563,4 +589,124 @@ export async function pruneSessions(db: Executor, now = new Date()) {
     .where(
       sql`${adminSessions.expiresAt} < ${new Date(now.getTime() - 86_400_000).toISOString()}::timestamptz`,
     );
+}
+
+// --- Password reset ---------------------------------------------------------------------
+
+/** A reset link works once, for this long. */
+export const RESET_MINUTES = 30;
+
+/**
+ * Issues a single-use password reset token for an active, enrolled account,
+ * replacing any earlier one. Returns null for unknown, disabled or
+ * un-enrolled accounts: callers must answer the same either way.
+ * Only the token's SHA-256 is stored.
+ */
+export async function issuePasswordReset(
+  db: Database,
+  input: { email: string; actor: string | null; now?: Date },
+): Promise<{ token: string; expiresAt: Date; email: string } | null> {
+  const now = input.now ?? new Date();
+  const email = input.email.trim().toLowerCase().slice(0, 254);
+  const [user] = await db
+    .select()
+    .from(adminUsers)
+    .where(eq(adminUsers.email, email));
+  if (!user || !user.enrolledAt || user.disabledAt) {
+    await audit(db, "admin.password_reset_requested", null, input.actor, {
+      issued: false,
+    });
+    return null;
+  }
+  const token = randomToken();
+  const expiresAt = new Date(now.getTime() + RESET_MINUTES * 60_000);
+  await db
+    .update(adminUsers)
+    .set({
+      passwordResetTokenHash: sha256(token),
+      passwordResetExpiresAt: expiresAt,
+    })
+    .where(eq(adminUsers.id, user.id));
+  await audit(db, "admin.password_reset_requested", user.id, input.actor, {
+    issued: true,
+  });
+  return { token, expiresAt, email: user.email };
+}
+
+export async function passwordResetValid(
+  db: Executor,
+  token: string,
+  now = new Date(),
+): Promise<boolean> {
+  if (!token || token.length > 100) return false;
+  const [user] = await db
+    .select({ id: adminUsers.id })
+    .from(adminUsers)
+    .where(
+      and(
+        eq(adminUsers.passwordResetTokenHash, sha256(token)),
+        gt(adminUsers.passwordResetExpiresAt, now),
+        isNull(adminUsers.disabledAt),
+      ),
+    );
+  return Boolean(user);
+}
+
+/**
+ * Sets a new password from a reset link. The link works once (cleared in
+ * the same update that uses it), clears any lockout, and signs the account
+ * out everywhere. The authenticator is still required to sign in.
+ */
+export async function completePasswordReset(
+  db: Database,
+  input: { token: string; password: string; now?: Date },
+): Promise<
+  | { ok: true }
+  | { ok: false; reason: "INVALID_LINK" | "WEAK_PASSWORD"; message?: string }
+> {
+  const now = input.now ?? new Date();
+  if (!input.token || input.token.length > 100)
+    return { ok: false, reason: "INVALID_LINK" };
+  const [user] = await db
+    .select()
+    .from(adminUsers)
+    .where(
+      and(
+        eq(adminUsers.passwordResetTokenHash, sha256(input.token)),
+        gt(adminUsers.passwordResetExpiresAt, now),
+        isNull(adminUsers.disabledAt),
+      ),
+    );
+  if (!user || !user.enrolledAt) return { ok: false, reason: "INVALID_LINK" };
+  const problem = passwordProblem(input.password, user.email);
+  if (problem) return { ok: false, reason: "WEAK_PASSWORD", message: problem };
+  const passwordHash = await hashPassword(input.password);
+  return db.transaction(async (tx) => {
+    // Conditional on the same token: two submissions can't both use it.
+    const [used] = await tx
+      .update(adminUsers)
+      .set({
+        passwordHash,
+        passwordResetTokenHash: null,
+        passwordResetExpiresAt: null,
+        failedAttempts: 0,
+        lockedUntil: null,
+      })
+      .where(
+        and(
+          eq(adminUsers.id, user.id),
+          eq(adminUsers.passwordResetTokenHash, sha256(input.token)),
+        ),
+      )
+      .returning({ id: adminUsers.id });
+    if (!used) return { ok: false, reason: "INVALID_LINK" } as const;
+    await tx
+      .update(adminSessions)
+      .set({ revokedAt: now })
+      .where(
+        and(eq(adminSessions.userId, user.id), isNull(adminSessions.revokedAt)),
+      );
+    await audit(tx, "admin.password_reset", user.id, user.email);
+    return { ok: true } as const;
+  });
 }

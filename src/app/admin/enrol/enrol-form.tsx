@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useActionState, useEffect, useRef } from "react";
 import { enrolAction, type EnrolState } from "../auth-actions";
+import { PasswordField } from "../auth-forms";
 import { authButton, authInput } from "../auth-ui";
 
 export function EnrolForm({ token }: { token: string }) {
@@ -55,37 +56,21 @@ export function EnrolForm({ token }: { token: string }) {
           </p>
         )}
       </div>
-      <div>
-        <label htmlFor="password" className="font-semibold text-pine-900">
-          New password
-        </label>
-        <input
-          id="password"
-          name="password"
-          type="password"
-          autoComplete="new-password"
-          minLength={12}
-          required
-          aria-describedby="password-hint"
-          className={authInput}
-        />
-        <p id="password-hint" className="mt-1 text-sm text-ink-muted">
-          At least 12 characters. A few unrelated words works well.
-        </p>
-      </div>
-      <div>
-        <label htmlFor="confirm" className="font-semibold text-pine-900">
-          Repeat the password
-        </label>
-        <input
-          id="confirm"
-          name="confirm"
-          type="password"
-          autoComplete="new-password"
-          required
-          className={authInput}
-        />
-      </div>
+      <PasswordField
+        label="New password"
+        autoComplete="new-password"
+        minLength={12}
+        describedBy="password-hint"
+      />
+      <p id="password-hint" className="-mt-3 text-sm text-ink-muted">
+        At least 12 characters. A few unrelated words works well.
+      </p>
+      <PasswordField
+        id="confirm"
+        name="confirm"
+        label="Repeat the password"
+        autoComplete="new-password"
+      />
       <div>
         <label htmlFor="code" className="font-semibold text-pine-900">
           Current code from the app
@@ -100,7 +85,11 @@ export function EnrolForm({ token }: { token: string }) {
           className={authInput}
         />
       </div>
-      <button type="submit" disabled={pending} className={authButton}>
+      <button
+        type="submit"
+        disabled={pending}
+        className={`${authButton} w-full disabled:cursor-wait disabled:opacity-70`}
+      >
         {pending ? "Setting up…" : "Finish set-up"}
       </button>
     </form>

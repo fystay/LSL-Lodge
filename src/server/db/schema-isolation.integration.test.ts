@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { randomBytes, randomUUID } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import { is } from "drizzle-orm";
@@ -24,6 +25,13 @@ import { createBookableProperty } from "../../../tests/support/test-db";
 import { createDatabase } from "./client";
 import { isolationProblems, isolationState, toSchema } from "./isolation";
 import * as schema from "./schema";
+
+/** Every committed migration, from the journal (not a hard-coded count). */
+const JOURNAL_ENTRIES = (
+  JSON.parse(readFileSync("drizzle/meta/_journal.json", "utf8")) as {
+    entries: unknown[];
+  }
+).entries.length;
 
 /**
  * The staging database shares a Supabase project with another application
@@ -190,7 +198,7 @@ describe("Lodge schema isolation on a shared database", () => {
       // Idempotent: a second run changes nothing.
       expect(migrate(appUrl()).status).toBe(0);
       const all = await app`SELECT created_at FROM __drizzle_migrations`;
-      expect(all).toHaveLength(11);
+      expect(all).toHaveLength(JOURNAL_ENTRIES);
 
       const verify = run("scripts/db-verify.mts", [], {
         DATABASE_SCHEMA: "lodge",
@@ -357,7 +365,7 @@ describe("Lodge schema isolation on a shared database", () => {
   });
 
   it("staging preflight reads the shared database without writing or leaking", async () => {
-    const journalEntries = 11;
+    const journalEntries = JOURNAL_ENTRIES;
     const app = postgres(appUrl(), { max: 1, onnotice: () => {} });
     try {
       const checks = await checkDatabase(

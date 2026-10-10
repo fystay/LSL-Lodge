@@ -177,6 +177,9 @@ test("admin pages have no automatically detectable WCAG A/AA violations", async 
     "/admin/system",
     "/admin/login",
   ]) {
+    // The sign-in page is checked as owners see it: signed out (signed-in
+    // owners are sent straight to the dashboard).
+    if (path === "/admin/login") await page.context().clearCookies();
     await page.goto(path);
     await settleAnimations(page);
     const results = await new AxeBuilder({ page })

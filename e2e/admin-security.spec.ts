@@ -46,8 +46,8 @@ test("owner enrols from a one-time link, then signs in with password and authent
     .textContent())!.replaceAll(" ", "");
   expect(secret).toMatch(/^[A-Z2-7]{32}$/);
 
-  await page.getByLabel("New password").fill(PASSWORD);
-  await page.getByLabel("Repeat the password").fill(PASSWORD);
+  await page.getByLabel("New password", { exact: true }).fill(PASSWORD);
+  await page.getByLabel("Repeat the password", { exact: true }).fill(PASSWORD);
   await page.getByLabel("Current code from the app").fill(codeFor(secret));
   await page.getByRole("button", { name: "Finish set-up" }).click();
   const done = page.getByRole("status");
@@ -63,14 +63,18 @@ test("owner enrols from a one-time link, then signs in with password and authent
   // Wrong password: generic message.
   await page.goto("/admin/login");
   await page.getByLabel("Email").fill(email);
-  await page.getByLabel("Password").fill("not the right password");
+  await page
+    .getByLabel("Password", { exact: true })
+    .fill("not the right password");
   await page.getByRole("button", { name: "Continue" }).click();
   await expect(
     page.getByRole("alert").filter({ hasText: "weren’t recognised" }),
   ).toBeVisible();
+  // The error doesn't clear the email address.
+  await expect(page.getByLabel("Email")).toHaveValue(email);
 
   await page.getByLabel("Email").fill(email);
-  await page.getByLabel("Password").fill(PASSWORD);
+  await page.getByLabel("Password", { exact: true }).fill(PASSWORD);
   await page.getByRole("button", { name: "Continue" }).click();
   await expect(page).toHaveURL(/\/admin\/login\/verify$/);
   // Password alone opens nothing.
@@ -160,4 +164,117 @@ test("admin changes are refused without a same-site Origin header", async ({
   await page.unrouteAll();
   await page.goto("/admin/blocks");
   await expect(page.getByText("CSRF probe")).toHaveCount(0);
+});
+
+const enrolledOwner = async (email: string) => invite(email);
+
+test("sign-in on a phone: password can be shown, a double tap signs in once, never 'took too long'", async ({
+  page,
+}, info) => {
+  const email = `double-${info.project.name}@example.test`;
+  const token = await enrolledOwner(email);
+  await page.goto(`/admin/enrol?t=${token}`);
+  const secret = (await page
+    .locator("p.font-mono")
+    .first()
+    .textContent())!.replaceAll(" ", "");
+  await page.getByLabel("New password", { exact: true }).fill(PASSWORD);
+  await page.getByLabel("Repeat the password", { exact: true }).fill(PASSWORD);
+  await page.getByLabel("Current code from the app").fill(codeFor(secret));
+  await page.getByRole("button", { name: "Finish set-up" }).click();
+  await expect(page.getByRole("status")).toContainText("Your account is ready");
+
+  await page.goto("/admin/login");
+  await page.getByLabel("Email").fill(email);
+  const password = page.getByLabel("Password", { exact: true });
+  await password.fill(PASSWORD);
+  // Show/hide: an accessible toggle that keeps focus in the field.
+  const toggle = page.getByRole("button", { name: "Show password" });
+  await expect(password).toHaveAttribute("type", "password");
+  await toggle.click();
+  await expect(password).toHaveAttribute("type", "text");
+  await expect(
+    page.getByRole("button", { name: "Hide password" }),
+  ).toHaveAttribute("aria-pressed", "true");
+  await expect(password).toBeFocused();
+  await page.getByRole("button", { name: "Hide password" }).click();
+  await expect(password).toHaveAttribute("type", "password");
+
+  await page.getByRole("button", { name: "Continue" }).dblclick();
+  await expect(page).toHaveURL(/\/admin\/login\/verify$/);
+  // The enrolment code's step is used up: take the next one.
+  await page
+    .getByLabel(/Code from your authenticator/)
+    .fill(codeFor(secret, 1));
+  // A double tap: the second must not report a timeout or a used code.
+  await page.getByRole("button", { name: "Sign in" }).dblclick();
+  await expect(
+    page.getByRole("heading", { level: 1, name: "Overview" }),
+  ).toBeVisible();
+  await expect(page.getByText("took too long")).toHaveCount(0);
+  // Signed in: the sign-in pages send you straight on.
+  await page.goto("/admin/login");
+  await expect(page).toHaveURL(/\/admin$/);
+});
+
+test("password reset: generic answer, single-use link, still needs the authenticator", async ({
+  page,
+}, info) => {
+  const email = `reset-${info.project.name}@example.test`;
+  const token = await enrolledOwner(email);
+  await page.goto(`/admin/enrol?t=${token}`);
+  const secret = (await page
+    .locator("p.font-mono")
+    .first()
+    .textContent())!.replaceAll(" ", "");
+  await page.getByLabel("New password", { exact: true }).fill(PASSWORD);
+  await page.getByLabel("Repeat the password", { exact: true }).fill(PASSWORD);
+  await page.getByLabel("Current code from the app").fill(codeFor(secret));
+  await page.getByRole("button", { name: "Finish set-up" }).click();
+  await expect(page.getByRole("status")).toContainText("Your account is ready");
+
+  // Same answer for a real and an unknown address.
+  const ask = async (address: string) => {
+    await page.goto("/admin/forgot");
+    await page.getByLabel("Email").fill(address);
+    await page.getByRole("button", { name: "Send reset link" }).click();
+    const msg = page.getByRole("status");
+    await expect(msg).toBeVisible();
+    return msg.textContent();
+  };
+  expect(await ask(email)).toBe(
+    await ask(`nobody-${info.project.name}@example.test`),
+  );
+
+  // Email delivery is off in tests: issue a link the way the operator does.
+  const { createHash, randomBytes } = await import("node:crypto");
+  const reset = randomBytes(32).toString("base64url");
+  const postgres = (await import("postgres")).default;
+  const sql = postgres(process.env.DATABASE_URL!, { max: 1 });
+  await sql`UPDATE admin_users SET password_reset_token_hash = ${createHash("sha256").update(reset).digest("hex")},
+    password_reset_expires_at = now() + interval '30 minutes' WHERE email = ${email}`;
+  await sql.end();
+
+  const NEW = "a completely new e2e passphrase";
+  await page.goto(`/admin/reset?t=${reset}`);
+  await page.getByLabel("New password", { exact: true }).fill(NEW);
+  await page.getByLabel("Repeat the new password", { exact: true }).fill(NEW);
+  await page.getByRole("button", { name: "Change password" }).click();
+  await expect(page).toHaveURL(/\/admin\/login\?notice=reset$/);
+  await expect(page.getByRole("status")).toContainText(
+    "password has been changed",
+  );
+  // Single use.
+  await page.goto(`/admin/reset?t=${reset}`);
+  await expect(
+    page
+      .getByRole("alert")
+      .filter({ hasText: "invalid, already used or expired" }),
+  ).toBeVisible();
+  // The new password leads to the code step, not straight in.
+  await page.goto("/admin/login");
+  await page.getByLabel("Email").fill(email);
+  await page.getByLabel("Password", { exact: true }).fill(NEW);
+  await page.getByRole("button", { name: "Continue" }).click();
+  await expect(page).toHaveURL(/\/admin\/login\/verify$/);
 });

@@ -24,6 +24,9 @@ export const LIMITS = {
   requestPerEmail: { name: "request:email", max: 3, windowSeconds: 86_400 },
   paymentPerBooking: { name: "payment:ref", max: 10, windowSeconds: 3600 },
   loginPerIp: { name: "login:ip", max: 10, windowSeconds: 900 },
+  /** Code entry after a correct password: separate, so one sign-in costs one of each. */
+  secondFactorPerIp: { name: "mfa:ip", max: 10, windowSeconds: 900 },
+  passwordResetPerIp: { name: "reset:ip", max: 5, windowSeconds: 3600 },
   enquiryPerIp: { name: "enquiry:ip", max: 5, windowSeconds: 3600 },
 } satisfies Record<string, Limit>;
 

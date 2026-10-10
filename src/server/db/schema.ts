@@ -784,6 +784,11 @@ export const adminUsers = pgTable(
     enrolmentExpiresAt: timestamp("enrolment_expires_at", {
       withTimezone: true,
     }),
+    /** Password reset: SHA-256 of a single-use token, and when it lapses. */
+    passwordResetTokenHash: text("password_reset_token_hash"),
+    passwordResetExpiresAt: timestamp("password_reset_expires_at", {
+      withTimezone: true,
+    }),
     enrolledAt: timestamp("enrolled_at", { withTimezone: true }),
     failedAttempts: integer("failed_attempts").notNull().default(0),
     lockedUntil: timestamp("locked_until", { withTimezone: true }),
@@ -814,6 +819,8 @@ export const adminSessions = pgTable(
       .references(() => adminUsers.id, { onDelete: "cascade" }),
     tokenHash: text("token_hash").notNull().unique(),
     mfaVerifiedAt: timestamp("mfa_verified_at", { withTimezone: true }),
+    /** Set on a pending session when its sign-in completed (it is then revoked). */
+    completedAt: timestamp("completed_at", { withTimezone: true }),
     /** Last time the second factor was re-entered, for sensitive actions. */
     reauthenticatedAt: timestamp("reauthenticated_at", { withTimezone: true }),
     lastSeenAt: timestamp("last_seen_at", { withTimezone: true }).notNull(),
