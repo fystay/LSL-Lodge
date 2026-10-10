@@ -27,6 +27,7 @@ import {
   type Executor,
 } from "../src/server/db/hosted-migrations";
 import { targetSchema } from "../src/server/db/isolation";
+import { managementApiExecutor } from "../src/server/db/management-api";
 
 const args = process.argv.slice(2);
 const option = (name: string) => {
@@ -38,58 +39,17 @@ const fail = (message: string): never => {
   process.exit(1);
 };
 
-const token = process.env.SUPABASE_ACCESS_TOKEN ?? "";
-if (!token) fail("Set SUPABASE_ACCESS_TOKEN as an environment secret.");
 const ref = option("--project") ?? "";
-const expectedName = option("--name") ?? "";
-if (!/^[a-z]{20}$/.test(ref)) fail("Pass --project <20-letter project ref>.");
-if (!expectedName) fail("Pass --name <project name> to confirm the target.");
 const schema = process.env.DATABASE_SCHEMA ? targetSchema() : "lodge";
 if (schema === "public") fail("Refusing: the Lodge schema can't be public.");
 const role = option("--role") ?? "lodge_app";
 const apply = args.includes("--apply");
 
-const api = `https://api.supabase.com/v1/projects/${ref}`;
-const headers = {
-  authorization: `Bearer ${token}`,
-  "content-type": "application/json",
-};
-
-const project = await fetch(api, {
-  headers,
-  signal: AbortSignal.timeout(20_000),
-});
-if (!project.ok) fail(`Can't read project ${ref}: HTTP ${project.status}.`);
-const info = (await project.json()) as { name?: string; status?: string };
-if (info.name !== expectedName)
-  fail(
-    `Refusing: project ${ref} is named "${info.name}", not "${expectedName}".`,
-  );
-if (info.status !== "ACTIVE_HEALTHY")
-  fail(`Refusing: project status is ${info.status}.`);
-console.log(
-  `Project ${ref} ("${info.name}"), schema "${schema}", role ${role}.`,
-);
-
-class Uncertain extends Error {}
-const exec: Executor = async (query) => {
-  let res: Response;
-  try {
-    res = await fetch(`${api}/database/query`, {
-      method: "POST",
-      headers,
-      body: JSON.stringify({ query }),
-      signal: AbortSignal.timeout(120_000),
-    });
-  } catch (error) {
-    throw new Uncertain(
-      `no response (${(error as Error).name}): outcome unknown`,
-    );
-  }
-  const body = await res.text();
-  if (!res.ok) throw new Error(`HTTP ${res.status}: ${body.slice(0, 500)}`);
-  return JSON.parse(body) as Record<string, unknown>[];
-};
+const exec: Executor = await managementApiExecutor({
+  ref,
+  expectedName: option("--name") ?? "",
+}).catch((error: Error) => fail(error.message));
+console.log(`Project ${ref}, schema "${schema}", role ${role}.`);
 
 const problems = await preconditions(exec, schema, role);
 if (problems.length > 0) fail(`Refusing: ${problems.join("; ")}.`);
