@@ -112,7 +112,7 @@ async function AdminCalendar({
         </Link>
       </div>
       <div
-        className="overflow-x-auto"
+        className="relative overflow-x-auto"
         tabIndex={0}
         role="region"
         aria-label="Calendar (scrolls sideways on small screens)"

@@ -188,6 +188,44 @@ test("admin pages have no automatically detectable WCAG A/AA violations", async 
   }
 });
 
+test("admin pages don't scroll sideways on a phone; wide tables scroll in place", async ({
+  page,
+  isMobile,
+}) => {
+  // Phone emulation zooms out to fit wide pages, hiding the overflow; a
+  // desktop browser narrowed to phone width measures it honestly.
+  test.skip(isMobile, "measured in the desktop project at phone width");
+  await page.setViewportSize({ width: 390, height: 844 });
+  await signIn(page);
+  for (const path of [
+    "/admin",
+    "/admin/bookings",
+    "/admin/calendar",
+    "/admin/blocks",
+    "/admin/pricing",
+    "/admin/settings",
+    "/admin/calendars",
+    "/admin/system",
+  ]) {
+    await page.goto(path);
+    // Wait for the streamed content (e.g. the calendar table) to arrive.
+    await page.waitForLoadState("networkidle");
+    await expect(page.getByText("Loading…")).toHaveCount(0);
+    const overflow = await page.evaluate(
+      () =>
+        document.documentElement.scrollWidth -
+        document.documentElement.clientWidth,
+    );
+    expect(overflow, path).toBeLessThanOrEqual(0);
+  }
+  // The calendar's own region still scrolls to show the whole month.
+  await page.goto("/admin/calendar");
+  const region = page.getByRole("region", { name: /Calendar/ });
+  expect(await region.evaluate((el) => el.scrollWidth > el.clientWidth)).toBe(
+    true,
+  );
+});
+
 test("the system page's problem list is accessible when something is wrong", async ({
   page,
 }, info) => {
