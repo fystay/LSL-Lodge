@@ -1,12 +1,26 @@
 # Staging setup (customer demo)
 
-Status: 10 October 2026. **Partly set up.** The Lodge's staging database
-now lives in the owner-authorised Supabase project `lsllodge`
-(`sqkpixwvugrxllrxlexs`), isolated in its own schema (§1); migrations
-0000–0001 are applied there, 0002–0010 are waiting for you (§5). There is
-still no Lodge Stripe sandbox and no staging environment variables on
-Vercel. Nothing here touches production (lsllodge.vercel.app), the other
+Status: 10 October 2026, 14:45 UTC. **Partly set up.** The Lodge's staging
+database lives in the owner-authorised Supabase project `lsllodge`
+(`sqkpixwvugrxllrxlexs`), isolated in schema `lodge` (§1), with migrations
+0000–0010 applied, demo data seeded and a demo owner invited
+(`pnpm staging:hosted`, §5). The Preview has its database, booking-preview
+and job secrets; search, quotes and holds work there. Still missing: a
+valid `CREDENTIALS_ENCRYPTION_KEY` (the one set doesn't parse as a base64
+32-byte key, so admin sign-in is off) and the Lodge Stripe sandbox (§2).
+Nothing here touches production (lsllodge.vercel.app), the other
 application's tables in that project, or the other app's Stripe sandbox.
+
+From a cloud session (HTTPS only, `SUPABASE_ACCESS_TOKEN` set), the
+direct-connection commands in §5 have hosted equivalents:
+
+```bash
+DATABASE_SCHEMA=lodge pnpm staging:hosted status --project sqkpixwvugrxllrxlexs --name lsllodge
+DATABASE_SCHEMA=lodge pnpm staging:hosted seed   --project sqkpixwvugrxllrxlexs --name lsllodge
+DATABASE_SCHEMA=lodge SITE_URL=https://lsllodge-git-claude-instant-booking-fystay1.vercel.app \
+  pnpm staging:hosted invite --project sqkpixwvugrxllrxlexs --name lsllodge \
+  --email <owner email> --out <private file>   # link written there, never printed
+```
 
 ## What "staging" is
 
